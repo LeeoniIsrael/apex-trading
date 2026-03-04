@@ -1,0 +1,112 @@
+---
+title: "APEX Development Journal — Day 1"
+date: "2026-03-03"
+categories: [development, setup, backtest]
+---
+
+## Summary
+
+Project initialized and first backtests completed. CLAUDE.md written, full scaffold generated, both candidate strategies validated against 5-year historical data (2020–2024). Momentum strategy cleared the Sharpe > 0.5 eligibility threshold for April trading.
+
+## Decisions Made
+
+- **Stack**: Python 3.12 + uv + Alpaca + vectorbt + DuckDB + Claude API + Streamlit + Quarto
+- **Timeline**: Build period March 3–31; agent starts April 1 midnight; live cap $150 starting April 15
+- **Strategy candidates**: Cross-sectional momentum (20-day risk-adjusted) and Bollinger Band mean reversion (20-day, 2σ)
+- **Universe tested**: SPY, QQQ, AAPL, MSFT, NVDA (2020-01-01 → 2024-12-31)
+
+---
+
+## Backtest Results
+
+### Universe & Parameters
+
+| Setting | Value |
+|---|---|
+| Symbols | SPY, QQQ, AAPL, MSFT, NVDA |
+| Period | 2020-01-01 → 2024-12-31 |
+| Fees | 0.1% per trade |
+| Starting capital | $100 (normalized) |
+
+### Side-by-Side Comparison
+
+| Metric | Momentum | Mean Reversion |
+|---|---|---|
+| **Sharpe Ratio** | **1.447** | 0.782 |
+| **Total Return** | **271.8%** | 77.2% |
+| **Max Drawdown** | 31.5% | **25.9%** |
+| Max Drawdown Duration | 354 days | **391 days** |
+| Sortino Ratio | **2.140** | 1.189 |
+| Calmar Ratio | **1.473** | 0.698 |
+| Omega Ratio | **1.229** | 1.261 |
+| Win Rate | N/A (open) | **78.1%** |
+| Total Trades | 5 | 32 |
+| Total Fees Paid | $0.07 | $7.95 |
+| Profit Factor | N/A | **3.36** |
+
+*Benchmark (equal-weight buy & hold): 573.2% over same period.*
+
+---
+
+## Strategy Analysis: Momentum is Stronger
+
+### Why Momentum Wins on Risk-Adjusted Returns
+
+**Sharpe 1.447 vs 0.782** — momentum produces nearly twice the risk-adjusted return. The core reason: this universe (SPY, QQQ, AAPL, MSFT, NVDA) spent 2020–2024 in a sustained tech bull market. Momentum strategies are structurally designed to exploit exactly this regime — they buy what's trending up and hold it. The strategy essentially rode NVDA and AAPL's multi-year runs.
+
+**Sortino 2.14 vs 1.19** — momentum's downside volatility is well-controlled relative to its gains. This matters most for the April experiment: we care more about not losing money than about volatility per se.
+
+**Fees: $0.07 vs $7.95** — momentum's low turnover (5 total trades in 5 years) means virtually zero friction. Mean reversion traded 32 times, paying 113× more in fees. At $150 live capital, fee drag from mean reversion would be material.
+
+### Why Mean Reversion Has Merits
+
+- **78.1% win rate** and **3.36 profit factor** — when it trades, it wins often and by more than it loses.
+- **Lower max drawdown (25.9% vs 31.5%)** — better capital preservation in crashes.
+- **More active** — 32 trades gives more data points for the research paper's statistical analysis.
+- **Regime-agnostic** — performs better in choppy/sideways markets that momentum struggles in.
+
+### Verdict for April
+
+**Primary strategy: Momentum.** It passes the Sharpe > 0.5 gate by a wide margin and suits the current market regime. Mean reversion is retained as a secondary strategy — the agent will run both signals and defer to momentum for position sizing, using mean reversion as a confirmation filter.
+
+**Important caveat**: both strategies underperform the benchmark significantly (271.8% and 77.2% vs 573.2%). This is expected — buy-and-hold in a 5-year tech bull market is a high bar. The value of APEX is the *autonomous* operation and risk management, not beating a concentrated tech benchmark.
+
+---
+
+## Bugs Fixed During Backtest Run
+
+1. `vbt.YFData.pull()` → `vbt.YFData.download()` — API renamed in vectorbt 0.28
+2. `yfinance` not installed — added via `uv add yfinance`
+3. ETFs (SPY, QQQ) return extra `Capital Gains` column vs stocks — fixed with `missing_columns="drop"`
+4. `size_type="targetpercent"` unsupported in `from_signals` — changed to `"percent"`
+
+---
+
+## Infrastructure Created
+
+- `src/agent/` — autonomous loop, Claude brain, Alpaca executor
+- `src/strategy/` — momentum, mean reversion, feature engineering (RSI, ATR, MA cross, volatility)
+- `src/data/` — DuckDB schema (bars, signals, trades, portfolio_snapshots, agent_logs), Alpaca ingestion
+- `src/backtest/` — vectorbt runner (both strategies, CLI flags)
+- `src/dashboard/` — Streamlit monitor (equity curve, trades, agent logs)
+- `docs/paper/index.qmd` — research paper skeleton
+- 11/11 tests passing
+
+---
+
+## Next Steps
+
+- [ ] Expand universe for backtesting (S&P 100 subset: 20–30 symbols)
+- [ ] Implement LightGBM signal layer on top of `src/strategy/features.py`
+- [ ] Backtest combined momentum + mean reversion signal
+- [ ] Set up Alpaca paper trading account and validate order execution
+- [ ] Draft paper Section 1 (Introduction) and Section 2.1 (System Architecture)
+- [ ] Add backtest results as embedded code blocks in `docs/paper/index.qmd`
+
+---
+
+## Notes
+
+- All secrets in `.env` — never committed. Live cap set as `APEX_LIVE_CAP_USD=150`.
+- vectorbt 0.28.4 + yfinance 1.2.0 confirmed working.
+- Run either backtest: `uv run python -m src.backtest.run --strategy [momentum|mean_reversion]`

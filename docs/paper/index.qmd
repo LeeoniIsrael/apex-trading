@@ -1,0 +1,88 @@
+---
+title: "APEX: Autonomous Predictive Equity eXperiment"
+subtitle: "A 30-Day Empirical Study of LLM-Augmented Algorithmic Trading"
+author: "Lee Israel"
+date: "2026-05-08"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    theme: cosmo
+  pdf:
+    documentclass: article
+    geometry: margin=1in
+    fontsize: 11pt
+bibliography: references.bib
+---
+
+## Abstract
+
+This paper presents APEX (Autonomous Predictive Equity eXperiment), a 30-day empirical study evaluating the performance of a Claude-powered autonomous trading agent on US equities. The agent combines cross-sectional momentum and mean-reversion strategies with LLM-based decision reasoning. Operating on Alpaca Markets from April 1–30, 2026 — first in paper trading mode, then with a $150 live capital cap — APEX generates, evaluates, and executes signals without human intervention. We report risk-adjusted returns, decision quality metrics, and qualitative analysis of the agent's reasoning chain. All code, data, and decision logs are open-sourced.
+
+**Keywords**: algorithmic trading, large language models, autonomous agents, momentum strategy, mean reversion
+
+---
+
+## 1. Introduction
+
+*[To be written during experiment — document motivation, prior work, research questions]*
+
+---
+
+## 2. Methodology
+
+### 2.1 System Architecture
+
+APEX consists of three components: a signal generation layer (vectorbt backtested strategies), a reasoning layer (Claude API), and an execution layer (Alpaca Markets). The agent runs on a fixed schedule: 09:31 ET for morning signals, 15:45 ET for afternoon rebalance, and 16:05 ET for end-of-day analysis.
+
+### 2.2 Strategies
+
+**Momentum**: Cross-sectional 20-day risk-adjusted momentum. Long top-5 ranked equities from the S&P 100 universe.
+
+**Mean Reversion**: Bollinger Band (20-day, 2σ) reversion. Long when price falls 2+ standard deviations below the 20-day mean.
+
+### 2.3 Risk Management
+
+- Maximum 10 concurrent positions
+- Maximum 5% portfolio weight per position
+- 2% trailing stop-loss on all positions
+- Hard live capital cap: $150
+
+---
+
+## 3. Strategy Backtests
+
+*[Populated during development — insert vectorbt results below]*
+
+```{python}
+#| label: backtest-results
+#| eval: false
+# Results from src/backtest/run.py
+# Insert momentum and mean-reversion backtest stats here
+```
+
+---
+
+## 4. Experiment Results
+
+*[Populated during April experiment]*
+
+---
+
+## 5. Discussion
+
+*[Populated post-experiment]*
+
+---
+
+## 6. Conclusion
+
+*[Populated post-experiment]*
+
+---
+
+## References
+
+::: {#refs}
+:::

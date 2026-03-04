@@ -1,0 +1,31 @@
+# Secrets — never commit
+.env
+
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv
+
+# uv
+.python-version
+
+# Data (DuckDB can grow large)
+data/*.duckdb
+data/*.parquet
+
+# Quarto build artifacts
+docs/_site/
+docs/.quarto/
+*.pdf
+
+# OS
+.DS_Store
