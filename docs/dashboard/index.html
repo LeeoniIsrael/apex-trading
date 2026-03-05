@@ -1,0 +1,1416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>APEX — Autonomous Predictive Equity eXperiment</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap" rel="stylesheet">
+<style>
+/* ─── RESET & BASE ─────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:        #04070f;
+  --bg2:       #070d1a;
+  --bg3:       #0b1425;
+  --card:      rgba(7, 18, 36, 0.75);
+  --green:     #00ff88;
+  --green2:    #00cc6a;
+  --green-dim: rgba(0,255,136,0.08);
+  --green-glow:rgba(0,255,136,0.25);
+  --amber:     #ffb347;
+  --amber2:    #ff8c00;
+  --amber-dim: rgba(255,179,71,0.08);
+  --amber-glow:rgba(255,179,71,0.25);
+  --red:       #ff4d6a;
+  --blue:      #4d9fff;
+  --text:      #cde4f5;
+  --text2:     #5d7d99;
+  --text3:     #3a556e;
+  --border:    rgba(0,255,136,0.15);
+  --border2:   rgba(255,179,71,0.15);
+  --font:      'JetBrains Mono', 'Courier New', monospace;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-x: hidden;
+  cursor: crosshair;
+}
+
+/* ─── CANVAS BACKGROUND ────────────────────────────────────────────────── */
+#bg-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* ─── SCANLINE OVERLAY ─────────────────────────────────────────────────── */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.04) 2px,
+    rgba(0,0,0,0.04) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ─── LAYOUT ────────────────────────────────────────────────────────────── */
+.wrapper {
+  position: relative;
+  z-index: 1;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+section { padding: 80px 0; }
+
+/* ─── TOP BAR ───────────────────────────────────────────────────────────── */
+.topbar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 32px;
+  background: rgba(4,7,15,0.85);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(0,255,136,0.1);
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.topbar-logo {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.3em;
+  color: var(--green);
+  text-shadow: 0 0 20px var(--green-glow);
+}
+
+.status-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--green-dim);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 3px 10px;
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  color: var(--green);
+}
+
+.status-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%,100% { opacity: 1; box-shadow: 0 0 0 0 var(--green-glow); }
+  50%      { opacity: 0.6; box-shadow: 0 0 0 4px transparent; }
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  font-size: 11px;
+  color: var(--text2);
+  letter-spacing: 0.1em;
+}
+
+.topbar-right a {
+  color: var(--text2);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+.topbar-right a:hover { color: var(--green); }
+
+/* ─── HERO ──────────────────────────────────────────────────────────────── */
+.hero {
+  padding: 160px 0 80px;
+  text-align: center;
+  position: relative;
+}
+
+.hero-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.4em;
+  color: var(--text2);
+  margin-bottom: 28px;
+  opacity: 0;
+  animation: fade-up 0.8s ease 0.2s forwards;
+}
+
+.hero-title {
+  font-size: clamp(72px, 14vw, 140px);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 0.9;
+  color: var(--green);
+  text-shadow:
+    0 0 40px rgba(0,255,136,0.4),
+    0 0 80px rgba(0,255,136,0.15),
+    0 0 120px rgba(0,255,136,0.08);
+  opacity: 0;
+  animation: fade-up 0.8s ease 0.4s forwards;
+  position: relative;
+  display: inline-block;
+}
+
+.hero-title::after {
+  content: '_';
+  animation: blink 1s step-end infinite;
+  color: var(--amber);
+}
+
+@keyframes blink {
+  0%,100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+
+.hero-subtitle {
+  font-size: clamp(12px, 2vw, 16px);
+  letter-spacing: 0.25em;
+  color: var(--text2);
+  margin-top: 24px;
+  opacity: 0;
+  animation: fade-up 0.8s ease 0.6s forwards;
+}
+
+.hero-subtitle span { color: var(--amber); }
+
+.hero-divider {
+  width: 1px;
+  height: 60px;
+  background: linear-gradient(to bottom, transparent, var(--green), transparent);
+  margin: 48px auto;
+  opacity: 0;
+  animation: fade-up 0.8s ease 0.8s forwards;
+}
+
+/* ─── COUNTDOWN ─────────────────────────────────────────────────────────── */
+.countdown-wrap {
+  opacity: 0;
+  animation: fade-up 0.8s ease 1.0s forwards;
+}
+
+.countdown-label {
+  font-size: 10px;
+  letter-spacing: 0.35em;
+  color: var(--text2);
+  margin-bottom: 16px;
+}
+
+.countdown {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.cd-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.cd-num {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 12px 18px;
+  font-size: clamp(24px,4vw,42px);
+  font-weight: 700;
+  color: var(--green);
+  min-width: 80px;
+  text-align: center;
+  backdrop-filter: blur(8px);
+  position: relative;
+  overflow: hidden;
+  transition: box-shadow 0.3s;
+}
+
+.cd-num::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255,255,255,0.03) 0%, transparent 50%);
+  pointer-events: none;
+}
+
+.cd-unit {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--text3);
+}
+
+.cd-sep {
+  font-size: 36px;
+  font-weight: 300;
+  color: var(--text3);
+  margin-bottom: 20px;
+  line-height: 1;
+}
+
+.launch-note {
+  margin-top: 20px;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--text3);
+}
+
+.launch-note span { color: var(--amber); }
+
+/* ─── SECTION HEADERS ───────────────────────────────────────────────────── */
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 48px;
+}
+
+.section-tag {
+  font-size: 9px;
+  letter-spacing: 0.35em;
+  color: var(--green);
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--green-dim);
+}
+
+.section-title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--text);
+}
+
+.section-line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(to right, var(--border), transparent);
+}
+
+/* ─── BUILD PROGRESS ────────────────────────────────────────────────────── */
+.progress-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 32px;
+  backdrop-filter: blur(12px);
+  position: relative;
+  overflow: hidden;
+}
+
+.progress-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(to right, var(--green), var(--amber));
+}
+
+.progress-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.progress-day-big {
+  font-size: 56px;
+  font-weight: 800;
+  color: var(--green);
+  line-height: 1;
+  text-shadow: 0 0 30px rgba(0,255,136,0.3);
+}
+
+.progress-day-label {
+  font-size: 13px;
+  color: var(--text2);
+  letter-spacing: 0.1em;
+}
+
+.progress-bar-wrap {
+  height: 6px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 3px;
+  margin-bottom: 32px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(to right, var(--green), var(--amber));
+  border-radius: 3px;
+  transition: width 1.5s cubic-bezier(0.16,1,0.3,1);
+  box-shadow: 0 0 12px var(--green-glow);
+}
+
+.checklist {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+}
+
+.check-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 3px;
+  font-size: 11.5px;
+  letter-spacing: 0.05em;
+  opacity: 0;
+  transform: translateX(-8px);
+  transition: opacity 0.4s, transform 0.4s;
+}
+
+.check-item.done {
+  background: rgba(0,255,136,0.04);
+  border: 1px solid rgba(0,255,136,0.12);
+  color: var(--text);
+}
+
+.check-item.pending {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.06);
+  color: var(--text2);
+}
+
+.check-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+  width: 18px;
+  text-align: center;
+}
+
+.check-item.done .check-icon { color: var(--green); }
+.check-item.pending .check-icon { color: var(--text3); }
+
+/* ─── STRATEGY CARDS ────────────────────────────────────────────────────── */
+.strategy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+}
+
+.strat-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 28px;
+  backdrop-filter: blur(12px);
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.3s, box-shadow 0.3s;
+  opacity: 0;
+  transform: translateY(20px);
+  cursor: default;
+}
+
+.strat-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 40px rgba(0,255,136,0.1);
+}
+
+.strat-card.amber {
+  border-color: var(--border2);
+}
+.strat-card.amber:hover {
+  box-shadow: 0 8px 40px rgba(255,179,71,0.1);
+}
+.strat-card.blue-card {
+  border-color: rgba(77,159,255,0.2);
+}
+.strat-card.blue-card:hover {
+  box-shadow: 0 8px 40px rgba(77,159,255,0.1);
+}
+
+.strat-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+}
+.strat-card:not(.amber):not(.blue-card)::before {
+  background: linear-gradient(to right, var(--green), transparent);
+}
+.strat-card.amber::before {
+  background: linear-gradient(to right, var(--amber), transparent);
+}
+.strat-card.blue-card::before {
+  background: linear-gradient(to right, var(--blue), transparent);
+}
+
+.strat-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.strat-name {
+  font-size: 11px;
+  letter-spacing: 0.25em;
+  color: var(--text2);
+  margin-bottom: 6px;
+}
+
+.strat-type {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--text);
+}
+
+.strat-badge {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  padding: 4px 8px;
+  border-radius: 2px;
+}
+.strat-card:not(.amber):not(.blue-card) .strat-badge {
+  background: var(--green-dim);
+  border: 1px solid var(--border);
+  color: var(--green);
+}
+.strat-card.amber .strat-badge {
+  background: var(--amber-dim);
+  border: 1px solid var(--border2);
+  color: var(--amber);
+}
+.strat-card.blue-card .strat-badge {
+  background: rgba(77,159,255,0.08);
+  border: 1px solid rgba(77,159,255,0.2);
+  color: var(--blue);
+}
+
+.strat-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metric-label {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--text3);
+}
+
+.metric-value {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.strat-card:not(.amber):not(.blue-card) .metric-value { color: var(--green); }
+.strat-card.amber .metric-value { color: var(--amber); }
+.strat-card.blue-card .metric-value { color: var(--blue); }
+
+.metric-sub {
+  font-size: 10px;
+  color: var(--text3);
+}
+
+/* Feature importance bar */
+.feat-bars { margin-top: 20px; display: flex; flex-direction: column; gap: 8px; }
+
+.feat-row {
+  display: grid;
+  grid-template-columns: 120px 1fr 40px;
+  gap: 8px;
+  align-items: center;
+}
+
+.feat-name { font-size: 10px; color: var(--text2); }
+
+.feat-bar-bg {
+  height: 4px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.feat-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  width: 0%;
+  transition: width 1.4s cubic-bezier(0.16,1,0.3,1);
+  background: linear-gradient(to right, var(--blue), #7b61ff);
+}
+
+.feat-pct { font-size: 9px; color: var(--text3); text-align: right; }
+
+/* ─── PROJECTION ────────────────────────────────────────────────────────── */
+.projection-card {
+  background: var(--card);
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  padding: 40px;
+  backdrop-filter: blur(12px);
+  position: relative;
+  overflow: hidden;
+}
+
+.projection-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(to right, var(--amber), var(--green));
+}
+
+.proj-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 40px;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+
+.proj-title-block {}
+
+.proj-label {
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  color: var(--text3);
+  margin-bottom: 8px;
+}
+
+.proj-capital {
+  font-size: 48px;
+  font-weight: 800;
+  color: var(--amber);
+  line-height: 1;
+  text-shadow: 0 0 30px rgba(255,179,71,0.3);
+}
+
+.proj-note {
+  font-size: 10px;
+  color: var(--text3);
+  margin-top: 6px;
+  letter-spacing: 0.05em;
+}
+
+.proj-assumption {
+  font-size: 10px;
+  color: var(--text2);
+  text-align: right;
+  line-height: 1.8;
+}
+
+.proj-assumption span { color: var(--green); }
+
+.proj-bars { display: flex; flex-direction: column; gap: 24px; }
+
+.proj-scenario {
+  display: grid;
+  grid-template-columns: 120px 1fr 80px 80px;
+  gap: 16px;
+  align-items: center;
+}
+
+.proj-scenario-name {
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  color: var(--text2);
+}
+
+.proj-bar-bg {
+  height: 28px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.06);
+  position: relative;
+}
+
+.proj-bar-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 2px;
+  transition: width 1.6s cubic-bezier(0.16,1,0.3,1);
+  display: flex;
+  align-items: center;
+  padding-left: 10px;
+  position: relative;
+}
+
+.proj-bar-fill::after {
+  content: '';
+  position: absolute;
+  top: 0; right: 0;
+  width: 3px; height: 100%;
+  background: rgba(255,255,255,0.4);
+  border-radius: 0 2px 2px 0;
+}
+
+.scenario-conservative .proj-bar-fill {
+  background: linear-gradient(to right, rgba(93,125,153,0.5), rgba(93,125,153,0.8));
+}
+.scenario-base .proj-bar-fill {
+  background: linear-gradient(to right, rgba(0,204,106,0.4), rgba(0,255,136,0.7));
+  box-shadow: 0 0 20px rgba(0,255,136,0.2);
+}
+.scenario-optimistic .proj-bar-fill {
+  background: linear-gradient(to right, rgba(255,140,0,0.4), rgba(255,179,71,0.8));
+  box-shadow: 0 0 20px rgba(255,179,71,0.2);
+}
+
+.proj-pct {
+  font-size: 14px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.scenario-conservative .proj-pct { color: var(--text2); }
+.scenario-base        .proj-pct { color: var(--green); }
+.scenario-optimistic  .proj-pct { color: var(--amber); }
+
+.proj-value {
+  font-size: 18px;
+  font-weight: 700;
+  text-align: right;
+}
+.scenario-conservative .proj-value { color: var(--text); }
+.scenario-base        .proj-value { color: var(--green); text-shadow: 0 0 12px rgba(0,255,136,0.3); }
+.scenario-optimistic  .proj-value { color: var(--amber); text-shadow: 0 0 12px rgba(255,179,71,0.3); }
+
+.proj-divider {
+  height: 1px;
+  background: rgba(255,255,255,0.05);
+  margin: 4px 0;
+}
+
+/* ─── TECH STACK ────────────────────────────────────────────────────────── */
+.tech-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 14px;
+}
+
+.tech-card {
+  background: var(--card);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 4px;
+  padding: 20px;
+  backdrop-filter: blur(8px);
+  transition: border-color 0.3s, transform 0.3s;
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+.tech-card:hover {
+  border-color: var(--border);
+  transform: translateY(-2px);
+}
+
+.tech-icon {
+  font-size: 22px;
+  margin-bottom: 10px;
+}
+
+.tech-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.tech-role {
+  font-size: 10px;
+  color: var(--text3);
+  letter-spacing: 0.05em;
+}
+
+/* ─── FOOTER ────────────────────────────────────────────────────────────── */
+footer {
+  border-top: 1px solid rgba(255,255,255,0.06);
+  padding: 40px 0;
+}
+
+.footer-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+
+.footer-left {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.footer-brand {
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.3em;
+  color: var(--green);
+}
+
+.footer-meta {
+  font-size: 10px;
+  color: var(--text3);
+  letter-spacing: 0.1em;
+}
+
+.footer-right {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.gh-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: var(--green-dim);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--green);
+  text-decoration: none;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+
+.gh-link:hover {
+  background: rgba(0,255,136,0.15);
+  box-shadow: 0 0 20px rgba(0,255,136,0.15);
+}
+
+.disclaimer {
+  font-size: 9px;
+  color: var(--text3);
+  letter-spacing: 0.05em;
+  line-height: 1.8;
+  max-width: 400px;
+  text-align: right;
+}
+
+/* ─── ANIMATIONS ────────────────────────────────────────────────────────── */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.reveal { opacity: 0; transform: translateY(20px); transition: opacity 0.6s ease, transform 0.6s ease; }
+.reveal.visible { opacity: 1; transform: translateY(0); }
+
+/* ─── SCROLLBAR ─────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: rgba(0,255,136,0.3); border-radius: 2px; }
+
+/* ─── RESPONSIVE ────────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .proj-scenario { grid-template-columns: 80px 1fr 60px 70px; gap: 10px; }
+  .topbar-right .disclaimer-hide { display: none; }
+  .cd-num { min-width: 60px; padding: 10px 12px; }
+}
+</style>
+</head>
+<body>
+
+<canvas id="bg-canvas"></canvas>
+
+<!-- TOP BAR -->
+<nav class="topbar">
+  <div class="topbar-left">
+    <div class="topbar-logo">APEX</div>
+    <div class="status-pill">
+      <div class="status-dot"></div>
+      BUILD PHASE
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span class="disclaimer-hide">DAY 3 / 28</span>
+    <a href="https://github.com/LeeoniIsrael/apex-trading" target="_blank">
+      ⎇ GITHUB
+    </a>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="wrapper">
+    <div class="hero-eyebrow">// AUTONOMOUS ALGORITHMIC TRADING EXPERIMENT — 2026</div>
+    <div class="hero-title">APEX</div>
+    <div class="hero-subtitle">
+      Autonomous Predictive <span>Equity</span> eXperiment
+    </div>
+    <div class="hero-divider"></div>
+
+    <div class="countdown-wrap">
+      <div class="countdown-label">// AGENT LAUNCH COUNTDOWN — APRIL 1, 2026 00:00 ET</div>
+      <div class="countdown">
+        <div class="cd-block">
+          <div class="cd-num" id="cd-days">00</div>
+          <div class="cd-unit">DAYS</div>
+        </div>
+        <div class="cd-sep">:</div>
+        <div class="cd-block">
+          <div class="cd-num" id="cd-hours">00</div>
+          <div class="cd-unit">HOURS</div>
+        </div>
+        <div class="cd-sep">:</div>
+        <div class="cd-block">
+          <div class="cd-num" id="cd-mins">00</div>
+          <div class="cd-unit">MINS</div>
+        </div>
+        <div class="cd-sep">:</div>
+        <div class="cd-block">
+          <div class="cd-num" id="cd-secs">00</div>
+          <div class="cd-unit">SECS</div>
+        </div>
+      </div>
+      <div class="launch-note">
+        Paper trading → <span>April 1</span> &nbsp;|&nbsp; Live trading (if profitable) → <span>April 15</span> &nbsp;|&nbsp; Experiment ends → <span>May 1</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- BUILD PROGRESS -->
+<section>
+  <div class="wrapper">
+    <div class="section-header reveal">
+      <div class="section-tag">01 // STATUS</div>
+      <div class="section-title">BUILD PROGRESS</div>
+      <div class="section-line"></div>
+    </div>
+
+    <div class="progress-card reveal">
+      <div class="progress-meta">
+        <div class="progress-day-big">3</div>
+        <div class="progress-day-label">/ 28 DAYS<br><span style="color:var(--text3);font-size:11px">MARCH BUILD PHASE</span></div>
+      </div>
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-fill" data-width="10.7"></div>
+      </div>
+      <div class="checklist" id="checklist">
+        <div class="check-item done"><div class="check-icon">✓</div><div>Project scaffold &amp; CLAUDE.md</div></div>
+        <div class="check-item done"><div class="check-icon">✓</div><div>25-stock universe (5 sectors)</div></div>
+        <div class="check-item done"><div class="check-icon">✓</div><div>Momentum backtest — Sharpe 1.504</div></div>
+        <div class="check-item done"><div class="check-icon">✓</div><div>Mean reversion backtest — Sharpe 0.782</div></div>
+        <div class="check-item done"><div class="check-icon">✓</div><div>LightGBM signal layer — AUC 0.52</div></div>
+        <div class="check-item done"><div class="check-icon">✓</div><div>Alpaca paper trading validated</div></div>
+        <div class="check-item done"><div class="check-icon">✓</div><div>Agent brain + LightGBM gate wired</div></div>
+        <div class="check-item pending"><div class="check-icon">◻</div><div>Regime-conditional gate</div></div>
+        <div class="check-item pending"><div class="check-icon">◻</div><div>Streamlit live dashboard</div></div>
+        <div class="check-item pending"><div class="check-icon">◻</div><div>Full agent loop (morning_scan)</div></div>
+        <div class="check-item pending"><div class="check-icon">◻</div><div>DuckDB trade logging</div></div>
+        <div class="check-item pending"><div class="check-icon">◻</div><div>Research paper — first draft</div></div>
+        <div class="check-item pending"><div class="check-icon">◻</div><div>Live trading — April 15 ($150 cap)</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- STRATEGY CARDS -->
+<section>
+  <div class="wrapper">
+    <div class="section-header reveal">
+      <div class="section-tag">02 // SIGNALS</div>
+      <div class="section-title">STRATEGY METRICS</div>
+      <div class="section-line"></div>
+    </div>
+
+    <div class="strategy-grid">
+
+      <!-- Momentum -->
+      <div class="strat-card reveal">
+        <div class="strat-card-header">
+          <div>
+            <div class="strat-name">STRATEGY 01</div>
+            <div class="strat-type">MOMENTUM</div>
+          </div>
+          <div class="strat-badge">PRIMARY</div>
+        </div>
+        <div class="strat-metrics">
+          <div class="metric">
+            <div class="metric-label">SHARPE RATIO</div>
+            <div class="metric-value" data-count="1.504" data-decimals="3">—</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">TOTAL RETURN</div>
+            <div class="metric-value" data-count="126.9" data-suffix="%" data-decimals="1">—</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">MAX DRAWDOWN</div>
+            <div class="metric-value" data-count="19.0" data-suffix="%" data-decimals="1">—</div>
+            <div class="metric-sub">25-symbol universe</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">TOTAL TRADES</div>
+            <div class="metric-value" data-count="1119" data-decimals="0">—</div>
+            <div class="metric-sub">2020–2024</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Mean Reversion -->
+      <div class="strat-card amber reveal">
+        <div class="strat-card-header">
+          <div>
+            <div class="strat-name">STRATEGY 02</div>
+            <div class="strat-type">MEAN REVERSION</div>
+          </div>
+          <div class="strat-badge">SECONDARY</div>
+        </div>
+        <div class="strat-metrics">
+          <div class="metric">
+            <div class="metric-label">SHARPE RATIO</div>
+            <div class="metric-value" data-count="0.782" data-decimals="3">—</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">TOTAL RETURN</div>
+            <div class="metric-value" data-count="77.2" data-suffix="%" data-decimals="1">—</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">MAX DRAWDOWN</div>
+            <div class="metric-value" data-count="25.9" data-suffix="%" data-decimals="1">—</div>
+            <div class="metric-sub">Bollinger Band (20d, 2σ)</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">WIN RATE</div>
+            <div class="metric-value" data-count="78.1" data-suffix="%" data-decimals="1">—</div>
+            <div class="metric-sub">32 trades</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- LightGBM -->
+      <div class="strat-card blue-card reveal">
+        <div class="strat-card-header">
+          <div>
+            <div class="strat-name">CONFIRMATION FILTER</div>
+            <div class="strat-type">LIGHTGBM</div>
+          </div>
+          <div class="strat-badge">ML GATE</div>
+        </div>
+        <div class="strat-metrics" style="margin-bottom:16px">
+          <div class="metric">
+            <div class="metric-label">MEAN CV AUC</div>
+            <div class="metric-value" data-count="0.5201" data-decimals="4">—</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">GATE THRESHOLD</div>
+            <div class="metric-value">55%</div>
+            <div class="metric-sub">proba ≥ 0.55 to enter</div>
+          </div>
+        </div>
+        <div class="feat-bars" id="feat-bars">
+          <div style="font-size:9px;letter-spacing:0.2em;color:var(--text3);margin-bottom:4px">FEATURE IMPORTANCE</div>
+          <div class="feat-row">
+            <div class="feat-name">volatility_60d</div>
+            <div class="feat-bar-bg"><div class="feat-bar-fill" data-w="100"></div></div>
+            <div class="feat-pct">919</div>
+          </div>
+          <div class="feat-row">
+            <div class="feat-name">atr_14</div>
+            <div class="feat-bar-bg"><div class="feat-bar-fill" data-w="90"></div></div>
+            <div class="feat-pct">832</div>
+          </div>
+          <div class="feat-row">
+            <div class="feat-name">volatility_20d</div>
+            <div class="feat-bar-bg"><div class="feat-bar-fill" data-w="86"></div></div>
+            <div class="feat-pct">792</div>
+          </div>
+          <div class="feat-row">
+            <div class="feat-name">ma_cross</div>
+            <div class="feat-bar-bg"><div class="feat-bar-fill" data-w="79"></div></div>
+            <div class="feat-pct">728</div>
+          </div>
+          <div class="feat-row">
+            <div class="feat-name">return_60d</div>
+            <div class="feat-bar-bg"><div class="feat-bar-fill" data-w="70"></div></div>
+            <div class="feat-pct">642</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- $150 PROJECTION -->
+<section>
+  <div class="wrapper">
+    <div class="section-header reveal">
+      <div class="section-tag">03 // FORECAST</div>
+      <div class="section-title">LIVE TRADING PROJECTION</div>
+      <div class="section-line"></div>
+    </div>
+
+    <div class="projection-card reveal">
+      <div class="proj-header">
+        <div class="proj-title-block">
+          <div class="proj-label">STARTING CAPITAL</div>
+          <div class="proj-capital">$150</div>
+          <div class="proj-note">April 15–30, 2026 · Hard cap · Paper must be profitable first</div>
+        </div>
+        <div class="proj-assumption">
+          Based on Sharpe 1.504<br>
+          Historical max drawdown <span>19.0%</span><br>
+          15-day live window<br>
+          Fractional Kelly sizing
+        </div>
+      </div>
+
+      <div class="proj-bars">
+        <div class="proj-scenario scenario-conservative">
+          <div class="proj-scenario-name">CONSERVATIVE</div>
+          <div class="proj-bar-bg">
+            <div class="proj-bar-fill" data-w="80"></div>
+          </div>
+          <div class="proj-pct">+8%</div>
+          <div class="proj-value">$162</div>
+        </div>
+
+        <div class="proj-divider"></div>
+
+        <div class="proj-scenario scenario-base">
+          <div class="proj-scenario-name">BASE CASE</div>
+          <div class="proj-bar-bg">
+            <div class="proj-bar-fill" data-w="88"></div>
+          </div>
+          <div class="proj-pct">+20%</div>
+          <div class="proj-value">$180</div>
+        </div>
+
+        <div class="proj-divider"></div>
+
+        <div class="proj-scenario scenario-optimistic">
+          <div class="proj-scenario-name">OPTIMISTIC</div>
+          <div class="proj-bar-bg">
+            <div class="proj-bar-fill" data-w="100"></div>
+          </div>
+          <div class="proj-pct">+35%</div>
+          <div class="proj-value">$202</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- TECH STACK -->
+<section>
+  <div class="wrapper">
+    <div class="section-header reveal">
+      <div class="section-tag">04 // STACK</div>
+      <div class="section-title">TECHNOLOGY</div>
+      <div class="section-line"></div>
+    </div>
+
+    <div class="tech-grid">
+      <div class="tech-card reveal">
+        <div class="tech-icon">🐍</div>
+        <div class="tech-name">Python 3.12</div>
+        <div class="tech-role">Core language · uv package manager</div>
+      </div>
+      <div class="tech-card reveal">
+        <div class="tech-icon">⚡</div>
+        <div class="tech-name">LightGBM</div>
+        <div class="tech-role">ML signal layer · AUC 0.52 gate</div>
+      </div>
+      <div class="tech-card reveal">
+        <div class="tech-icon">📊</div>
+        <div class="tech-name">vectorbt</div>
+        <div class="tech-role">Backtesting engine · portfolio simulation</div>
+      </div>
+      <div class="tech-card reveal">
+        <div class="tech-icon">🦆</div>
+        <div class="tech-name">DuckDB</div>
+        <div class="tech-role">Trade log · market data store</div>
+      </div>
+      <div class="tech-card reveal">
+        <div class="tech-icon">🦙</div>
+        <div class="tech-name">Alpaca Markets</div>
+        <div class="tech-role">Paper + live brokerage API</div>
+      </div>
+      <div class="tech-card reveal">
+        <div class="tech-icon">🧠</div>
+        <div class="tech-name">Claude API</div>
+        <div class="tech-role">Haiku (tick) · Sonnet (EOD analysis)</div>
+      </div>
+      <div class="tech-card reveal">
+        <div class="tech-icon">⏰</div>
+        <div class="tech-name">APScheduler</div>
+        <div class="tech-role">9:31 · 15:45 · 16:05 ET schedule</div>
+      </div>
+      <div class="tech-card reveal">
+        <div class="tech-icon">📡</div>
+        <div class="tech-name">Streamlit</div>
+        <div class="tech-role">Live monitoring dashboard</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrapper">
+    <div class="footer-inner">
+      <div class="footer-left">
+        <div class="footer-brand">APEX</div>
+        <div class="footer-meta">© 2026 · Build phase · March 3 – March 31</div>
+        <div class="footer-meta" style="color:var(--text3);margin-top:4px">
+          Agent starts April 1, 2026 · Live cap $150 · Experiment ends May 1
+        </div>
+      </div>
+      <div class="footer-right" style="flex-direction:column;align-items:flex-end;gap:12px">
+        <a href="https://github.com/LeeoniIsrael/apex-trading" target="_blank" class="gh-link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.21 11.38.6.11.82-.26.82-.58v-2.03c-3.34.72-4.04-1.61-4.04-1.61-.54-1.38-1.33-1.74-1.33-1.74-1.08-.74.08-.73.08-.73 1.2.09 1.83 1.23 1.83 1.23 1.07 1.83 2.8 1.3 3.48 1 .11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.13-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 3-.4c1.02.01 2.04.14 3 .4 2.28-1.55 3.29-1.23 3.29-1.23.66 1.66.25 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.62-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.21.7.83.58C20.57 21.8 24 17.3 24 12c0-6.63-5.37-12-12-12z"/>
+          </svg>
+          VIEW SOURCE
+        </a>
+        <div class="disclaimer">
+          For research and educational purposes only.<br>
+          Not financial advice. Trade at your own risk.
+        </div>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+/* ─── CANVAS BACKGROUND ─────────────────────────────────────────────────── */
+(function() {
+  const canvas = document.getElementById('bg-canvas');
+  const ctx = canvas.getContext('2d');
+  let W, H, particles;
+  const GREEN = 'rgba(0,255,136,';
+  const BLUE  = 'rgba(77,159,255,';
+
+  function resize() {
+    W = canvas.width  = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+
+  function makeParticles(n) {
+    return Array.from({length:n}, () => ({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      vx: (Math.random() - 0.5) * 0.3,
+      vy: (Math.random() - 0.5) * 0.3,
+      r: Math.random() * 1.5 + 0.5,
+      hue: Math.random() < 0.7 ? 'g' : 'b',
+    }));
+  }
+
+  let t = 0;
+
+  function drawGrid() {
+    const sz = 80;
+    const pulse = 0.03 + 0.015 * Math.sin(t * 0.008);
+    ctx.strokeStyle = `rgba(0,255,136,${pulse})`;
+    ctx.lineWidth = 0.5;
+    for (let x = 0; x < W; x += sz) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    }
+    for (let y = 0; y < H; y += sz) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+  }
+
+  function drawParticles() {
+    for (const p of particles) {
+      p.x += p.vx; p.y += p.vy;
+      if (p.x < 0) p.x = W; if (p.x > W) p.x = 0;
+      if (p.y < 0) p.y = H; if (p.y > H) p.y = 0;
+
+      const col = p.hue === 'g' ? GREEN : BLUE;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = col + '0.6)';
+      ctx.fill();
+    }
+
+    // Connect nearby
+    for (let i = 0; i < particles.length; i++) {
+      for (let j = i + 1; j < particles.length; j++) {
+        const dx = particles[i].x - particles[j].x;
+        const dy = particles[i].y - particles[j].y;
+        const d  = Math.sqrt(dx*dx + dy*dy);
+        if (d < 120) {
+          const col = particles[i].hue === 'g' ? GREEN : BLUE;
+          ctx.beginPath();
+          ctx.strokeStyle = col + (0.12 * (1 - d/120)) + ')';
+          ctx.lineWidth = 0.5;
+          ctx.moveTo(particles[i].x, particles[i].y);
+          ctx.lineTo(particles[j].x, particles[j].y);
+          ctx.stroke();
+        }
+      }
+    }
+  }
+
+  function frame() {
+    ctx.clearRect(0, 0, W, H);
+    drawGrid();
+    drawParticles();
+    t++;
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener('resize', () => { resize(); particles = makeParticles(55); });
+  resize();
+  particles = makeParticles(55);
+  frame();
+})();
+
+/* ─── COUNTDOWN ─────────────────────────────────────────────────────────── */
+(function() {
+  // April 1 2026 00:00:00 Eastern = 04:00:00 UTC
+  const target = new Date('2026-04-01T04:00:00Z').getTime();
+
+  function pad(n) { return String(n).padStart(2, '0'); }
+
+  function tick() {
+    const now  = Date.now();
+    const diff = Math.max(0, target - now);
+    const d = Math.floor(diff / 86400000);
+    const h = Math.floor((diff % 86400000) / 3600000);
+    const m = Math.floor((diff % 3600000)  / 60000);
+    const s = Math.floor((diff % 60000)    / 1000);
+
+    document.getElementById('cd-days').textContent  = pad(d);
+    document.getElementById('cd-hours').textContent = pad(h);
+    document.getElementById('cd-mins').textContent  = pad(m);
+    document.getElementById('cd-secs').textContent  = pad(s);
+  }
+
+  tick();
+  setInterval(tick, 1000);
+})();
+
+/* ─── INTERSECTION OBSERVER — REVEAL + ANIMATE ──────────────────────────── */
+(function() {
+  let animationsTriggered = false;
+
+  function triggerAnimations() {
+    if (animationsTriggered) return;
+    animationsTriggered = true;
+
+    // Progress bar
+    const bar = document.querySelector('.progress-bar-fill');
+    if (bar) {
+      setTimeout(() => {
+        bar.style.width = bar.dataset.width + '%';
+      }, 300);
+    }
+
+    // Checklist items staggered
+    const items = document.querySelectorAll('.check-item');
+    items.forEach((el, i) => {
+      setTimeout(() => {
+        el.style.opacity = '1';
+        el.style.transform = 'translateX(0)';
+      }, 100 + i * 60);
+    });
+
+    // Count-up numbers
+    document.querySelectorAll('[data-count]').forEach(el => {
+      const target   = parseFloat(el.dataset.count);
+      const decimals = parseInt(el.dataset.decimals || '2');
+      const suffix   = el.dataset.suffix || '';
+      const dur      = 1400;
+      const start    = performance.now();
+      function step(now) {
+        const p = Math.min((now - start) / dur, 1);
+        const ease = 1 - Math.pow(1 - p, 3);
+        el.textContent = (target * ease).toFixed(decimals) + suffix;
+        if (p < 1) requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
+    });
+
+    // Feature importance bars
+    document.querySelectorAll('.feat-bar-fill').forEach((bar, i) => {
+      setTimeout(() => {
+        bar.style.width = bar.dataset.w + '%';
+      }, 200 + i * 120);
+    });
+
+    // Projection bars
+    document.querySelectorAll('.proj-bar-fill').forEach((bar, i) => {
+      setTimeout(() => {
+        bar.style.width = bar.dataset.w + '%';
+      }, 200 + i * 200);
+    });
+  }
+
+  // Reveal on scroll
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+        if (entry.target.closest('.progress-card, .strat-card, .projection-card')) {
+          triggerAnimations();
+        }
+      }
+    });
+  }, { threshold: 0.1 });
+
+  document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+  // Staggered strat cards
+  document.querySelectorAll('.strat-card').forEach((card, i) => {
+    card.style.transitionDelay = (i * 120) + 'ms';
+  });
+
+  // Tech cards stagger
+  document.querySelectorAll('.tech-card').forEach((card, i) => {
+    card.style.transitionDelay = (i * 60) + 'ms';
+  });
+
+  // For above-the-fold elements and early-scroll animation trigger
+  const progressObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) triggerAnimations();
+    });
+  }, { threshold: 0.2 });
+
+  const progressCard = document.querySelector('.progress-card');
+  if (progressCard) progressObserver.observe(progressCard);
+})();
+</script>
+
+</body>
+</html>
