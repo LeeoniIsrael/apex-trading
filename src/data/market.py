@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 import duckdb
 from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.enums import DataFeed
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
@@ -34,6 +35,7 @@ def fetch_bars(
         start=start,
         end=end or datetime.now(tz=timezone.utc),
         timeframe=timeframe,
+        feed=DataFeed.IEX,   # free tier — use IEX (SIP requires paid subscription)
     )
     bars = client.get_stock_bars(request)
     rows = []
