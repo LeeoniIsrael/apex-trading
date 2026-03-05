@@ -2,6 +2,10 @@
 
 Uses claude-haiku-4-5 for tick-level decisions (cost efficiency).
 Uses claude-sonnet-4-6 for end-of-day analysis.
+
+LightGBM gate: before any BUY reaches Claude, the LightGBM confirmation filter
+is checked. If proba < LGBM_THRESHOLD the signal is downgraded to HOLD without
+spending an API call.
 """
 
 from __future__ import annotations
@@ -11,12 +15,17 @@ import logging
 from datetime import datetime, timezone
 
 import anthropic
+import pandas as pd
 
 from src.config import settings
+from src.strategy.features import LGBMSignalModel, build_training_dataset
 
 logger = logging.getLogger(__name__)
 
+LGBM_THRESHOLD = 0.55  # minimum LightGBM probability to allow a BUY
+
 _client: anthropic.Anthropic | None = None
+_lgbm_model: LGBMSignalModel | None = None
 
 
 def _get_client() -> anthropic.Anthropic:
@@ -24,6 +33,49 @@ def _get_client() -> anthropic.Anthropic:
     if _client is None:
         _client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     return _client
+
+
+def init_lgbm_filter(price_data: dict[str, pd.DataFrame]) -> None:
+    """Train and cache the LightGBM filter from historical price data.
+
+    Call once at agent startup before the trading loop begins.
+    price_data: {symbol: OHLCV DataFrame} covering the training window.
+    """
+    global _lgbm_model
+    logger.info("Training LightGBM confirmation filter…")
+    dataset = build_training_dataset(price_data)
+    model = LGBMSignalModel(n_splits=5)
+    model.fit(dataset)
+    _lgbm_model = model
+    logger.info(
+        "LightGBM filter ready. Mean CV AUC: %.4f",
+        sum(model.cv_scores_) / len(model.cv_scores_),
+    )
+
+
+def apply_lgbm_gate(symbol: str, df: pd.DataFrame) -> tuple[float, bool]:
+    """Check LightGBM confirmation for the latest row of df.
+
+    Returns (proba, passes) where passes=True means LightGBM agrees with BUY.
+    If the model is not yet trained, passes defaults to True (no blocking).
+    """
+    if _lgbm_model is None:
+        logger.debug("LightGBM filter not initialised — gate open by default")
+        return (1.0, True)
+
+    df = df.copy()
+    df.columns = [c.lower() for c in df.columns]
+    from src.strategy.features import add_momentum_features
+    df = add_momentum_features(df)
+    latest = df.dropna().tail(1)
+    if latest.empty:
+        logger.warning("apply_lgbm_gate: insufficient data for %s — gate open", symbol)
+        return (1.0, True)
+
+    proba = float(_lgbm_model.predict_proba(latest)[0])
+    passes = proba >= LGBM_THRESHOLD
+    logger.debug("LGBM gate %s: proba=%.3f passes=%s", symbol, proba, passes)
+    return (proba, passes)
 
 
 DECISION_SYSTEM_PROMPT = """You are APEX, an autonomous equity trading agent.
@@ -42,6 +94,7 @@ Rules:
 - Always consider current market regime (trending vs. mean-reverting)
 - Prefer HOLD when confidence < 0.6
 - Cite specific data points in your reasoning
+- lgbm_proba in market_context is the LightGBM confirmation probability (>= 0.55 means ML agrees)
 """
 
 
@@ -50,8 +103,36 @@ def evaluate_signal(
     strategy_signal: str,
     market_context: dict,
     portfolio_state: dict,
+    df: pd.DataFrame | None = None,
 ) -> dict:
-    """Ask Claude haiku to evaluate a signal and return a structured decision."""
+    """Evaluate a trading signal with LightGBM gate + Claude reasoning.
+
+    For BUY signals: LightGBM is checked first. If proba < LGBM_THRESHOLD the
+    signal is immediately downgraded to HOLD without spending a Claude API call.
+    For SELL/HOLD signals: LightGBM gate is skipped (never blocks exits).
+    """
+    lgbm_proba: float = 1.0
+
+    if strategy_signal.upper() == "BUY" and df is not None:
+        lgbm_proba, passes = apply_lgbm_gate(symbol, df)
+        if not passes:
+            logger.info(
+                "LGBM gate BLOCKED %s BUY — proba=%.3f < threshold=%.2f",
+                symbol, lgbm_proba, LGBM_THRESHOLD,
+            )
+            return {
+                "action": "HOLD",
+                "confidence": lgbm_proba,
+                "reasoning": (
+                    f"LightGBM confirmation filter blocked entry: "
+                    f"proba={lgbm_proba:.3f} < threshold={LGBM_THRESHOLD}. "
+                    "Momentum signal present but ML does not confirm."
+                ),
+                "risk_factors": ["lgbm_confirmation_failed"],
+            }
+
+    market_context = {**market_context, "lgbm_proba": round(lgbm_proba, 4)}
+
     prompt = f"""
 Symbol: {symbol}
 Strategy signal: {strategy_signal}

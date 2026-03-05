@@ -102,7 +102,18 @@ def main():
         choices=["momentum", "mean_reversion"],
         default="momentum",
     )
-    parser.add_argument("--symbols", nargs="+", default=["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "BRK-B"])
+    parser.add_argument("--symbols", nargs="+", default=[
+        # Tech (8)
+        "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AVGO",
+        # Finance (5)
+        "JPM", "BAC", "GS", "BRK-B", "V",
+        # Healthcare (4)
+        "JNJ", "UNH", "LLY", "ABBV",
+        # Consumer (4)
+        "HD", "MCD", "NKE", "COST",
+        # Energy (4)
+        "XOM", "CVX", "COP", "SLB",
+    ])
     parser.add_argument("--start", default="2020-01-01")
     parser.add_argument("--end", default="2024-12-31")
     args = parser.parse_args()

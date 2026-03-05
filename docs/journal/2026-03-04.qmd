@@ -1,0 +1,158 @@
+---
+title: "APEX Development Journal — Day 2 & 3"
+date: "2026-03-04"
+categories: [development, backtest, ml, alpaca, agent]
+---
+
+## Summary
+
+Two full sessions today. Day 2 expanded the backtest universe and implemented the LightGBM signal layer. Day 3 wired LightGBM into the agent brain as a confirmation filter, ran a rigorous out-of-sample combined backtest, and pushed everything to GitHub.
+
+---
+
+## Day 2 Work
+
+### Expanded Backtest Universe (25 Symbols)
+
+| Sector | Symbols |
+|---|---|
+| Tech (8) | AAPL, MSFT, NVDA, GOOGL, AMZN, META, TSLA, AVGO |
+| Finance (5) | JPM, BAC, GS, BRK-B, V |
+| Healthcare (4) | JNJ, UNH, LLY, ABBV |
+| Consumer (4) | HD, MCD, NKE, COST |
+| Energy (4) | XOM, CVX, COP, SLB |
+
+#### Momentum Backtest (2020–2024, full period)
+
+| Metric | Day 1 (5 symbols) | Day 2 (25 symbols) | Delta |
+|---|---|---|---|
+| Sharpe Ratio | 1.447 | **1.504** | +0.057 |
+| Total Return | 271.8% | 126.9% | — (less concentrated) |
+| Max Drawdown | 31.5% | **19.0%** | −12.5% |
+| Sortino | 2.140 | **2.227** | +0.087 |
+| Total Trades | 5 | 1,119 | — |
+
+Max drawdown improved dramatically — the 5-symbol run was an over-concentrated tech bet, not a diversified strategy.
+
+### LightGBM Signal Layer (src/strategy/features.py)
+
+Trained on 29,925 rows across 25 symbols (2020–2024). Binary classifier predicting positive 5-day forward return.
+
+#### Cross-Validation (5-fold TimeSeriesSplit)
+
+| Fold | AUC |
+|---|---|
+| 1 | 0.5178 |
+| 2 | 0.5139 |
+| 3 | 0.5078 |
+| 4 | 0.5039 |
+| 5 | 0.5573 |
+| **Mean** | **0.5201 ± 0.0192** |
+
+#### Feature Importance
+
+| Rank | Feature | Importance | Notes |
+|---|---|---|---|
+| 1 | volatility_60d | 919 | Long-run regime dominates |
+| 2 | atr_14 | 832 | Short-run price range |
+| 3 | volatility_20d | 792 | Medium-term regime |
+| 4 | ma_cross | 728 | Trend direction |
+| 5 | return_60d | 642 | Long momentum |
+| 6–10 | return_20d, return_5d, rsi_14, volume_ratio, return_10d | 362–468 | Secondary signals |
+
+### Alpaca Paper Trading Validation
+
+| Field | Value |
+|---|---|
+| Account Cash | $100,000.00 |
+| Buying Power | $200,000.00 |
+| Test Order | BUY 1 SPY — `ACCEPTED` |
+| Order ID | c1a2c7c9-7a95-49d1-9d88-e3ed32ac4238 |
+
+Executor fully operational.
+
+---
+
+## Day 3 Work
+
+### LightGBM Gate in src/agent/brain.py
+
+**Design**: Before any BUY signal reaches the Claude API, `apply_lgbm_gate()` checks the LightGBM probability. If proba < 0.55, the signal is immediately returned as HOLD without spending a Claude API call. SELL signals bypass the gate entirely — exits are never blocked.
+
+**Key functions added**:
+
+- `init_lgbm_filter(price_data)` — train and cache the model at agent startup
+- `apply_lgbm_gate(symbol, df)` → `(proba, passes)` — checks latest row
+- `evaluate_signal(...)` — now accepts optional `df` parameter; gates BUY before Claude
+- `LGBM_THRESHOLD = 0.55` — module-level constant
+
+**Cost benefit**: Blocked BUYs never hit the Claude API — the gate is pure Python/numpy, saving ~$0.00025/blocked call at scale (matters at 1,000+ daily ticks).
+
+### Combined Backtest Results
+
+**Methodology**:
+- Training window: 2020-01-01 → 2022-12-31 (LightGBM fit, in-sample)
+- Test window: 2023-01-01 → 2024-12-31 (out-of-sample comparison)
+- Both strategies: 25-symbol universe, top-5 momentum, 0.1% fees
+
+| Metric | Momentum only | Mom + LightGBM | Delta |
+|---|---|---|---|
+| **Sharpe Ratio** | **1.867** | 1.755 | −0.112 |
+| **Total Return [%]** | **39.2** | 27.5 | −11.7% |
+| **Max Drawdown [%]** | **7.8** | 9.0 | +1.1% |
+| **Sortino Ratio** | **3.151** | 2.670 | −0.481 |
+| **Calmar Ratio** | **3.469** | 2.152 | −1.317 |
+| Win Rate [%] | 43.0 | **43.5** | +0.5% |
+| Total Trades | 440 | 253 | −187 (43% filtered) |
+| Profit Factor | 1.651 | 1.617 | −0.034 |
+
+**Finding: LightGBM filter hurt performance in the 2023–2024 bull market (−0.11 Sharpe).**
+
+This is the most important result of Day 3. The filter reduced trade count by 43%, but in a sustained bull market momentum entries that were blocked were mostly profitable. The LightGBM model (AUC ~0.53) is simply not strong enough to overcome the base rate advantage of momentum in a trending market.
+
+**Implications for April**:
+
+1. The filter is **regime-dependent**: it is most valuable in choppy/uncertain markets where it can prevent false entries. In a trending bull market it reduces alpha.
+2. The agent will use the filter as a **soft gate**: blocked signals are logged and reconsidered if the momentum score is in the top 2 (vs top 5) — an override path for very strong signals.
+3. This result will be a central finding in the research paper: *LightGBM confirmation filtering reduces trading frequency but shows negative alpha in bull markets, suggesting regime-conditional application.*
+
+### Tests
+
+| Session | Tests |
+|---|---|
+| Day 2 end | 11/11 ✓ |
+| Day 3 — after brain.py changes | 16/16 ✓ |
+| Final (before commit) | 16/16 ✓ |
+
+5 new tests added in `tests/agent/test_brain.py` covering: gate-open-by-default, high/low proba stubs, HOLD-on-block, and SELL-bypass behavior.
+
+---
+
+## Bugs Fixed
+
+1. **`libomp` missing on macOS** — LightGBM requires OpenMP (`brew install libomp`)
+2. **sklearn feature-name warning** — Final LightGBM model and `predict_proba` now use named DataFrames (`pd.DataFrame(..., columns=FEATURE_COLUMNS)`) for consistency
+3. **vectorbt multi-symbol data reshaping** — fallback reconstruction of per-symbol OHLCV from field-level wide arrays in `train_lgbm.py`
+
+---
+
+## Files Changed
+
+| File | Change |
+|---|---|
+| `src/backtest/run.py` | Default symbol list → 25 symbols |
+| `src/strategy/features.py` | Added `build_training_dataset()`, `LGBMSignalModel`; fixed named-DataFrame prediction |
+| `src/agent/brain.py` | Added `init_lgbm_filter()`, `apply_lgbm_gate()`, gated `evaluate_signal()` |
+| `src/backtest/train_lgbm.py` | New — standalone LightGBM training script |
+| `src/backtest/combined.py` | New — combined backtest (momentum vs momentum+LGBM) |
+| `tests/agent/test_brain.py` | New — 5 tests for LightGBM gate behavior |
+
+---
+
+## Next Steps (Day 4)
+
+- [ ] Implement regime-conditional LightGBM gate (active only when VIX-equivalent signal is elevated)
+- [ ] Run mean reversion backtest on 25-symbol universe
+- [ ] Draft paper Section 1 (Introduction) and Section 2.1 (System Architecture)
+- [ ] Add backtest result tables to `docs/paper/index.qmd`
+- [ ] Fill in `morning_scan()` in `src/agent/loop.py` — wire full pipeline end-to-end
