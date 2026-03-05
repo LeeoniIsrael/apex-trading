@@ -138,6 +138,25 @@ Each session should follow this order:
 
 ---
 
+## Standing Orders
+
+These two commands run after **every meaningful milestone** — not just at end of session:
+
+1. **Update + deploy the dashboard**
+   ```bash
+   # Edit docs/dashboard/index.html with latest progress/metrics/checklist, then:
+   netlify deploy --dir=docs/dashboard --prod
+   ```
+
+2. **Commit and push to GitHub**
+   ```bash
+   git add . && git commit -m '[descriptive message]' && git push origin main
+   ```
+
+These are non-negotiable. Every step completion = dashboard update + deploy + commit + push.
+
+---
+
 ## Hard Rules (Never Break)
 
 1. **No secrets in code** — all API keys in `.env` via Pydantic Settings

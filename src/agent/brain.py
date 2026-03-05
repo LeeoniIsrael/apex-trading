@@ -3,9 +3,13 @@
 Uses claude-haiku-4-5 for tick-level decisions (cost efficiency).
 Uses claude-sonnet-4-6 for end-of-day analysis.
 
-LightGBM gate: before any BUY reaches Claude, the LightGBM confirmation filter
-is checked. If proba < LGBM_THRESHOLD the signal is downgraded to HOLD without
-spending an API call.
+LightGBM gate: regime-conditional.
+- In 'choppy' regime (SPY 20d vol > 1.5x its 60d average): gate is ACTIVE.
+  BUY signals are blocked if LightGBM proba < LGBM_THRESHOLD.
+- In 'trending' regime: gate is OPEN. All momentum BUYs pass through to Claude.
+
+This prevents the filter from reducing alpha in trending bull markets while
+still providing noise-rejection during choppy/uncertain conditions.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from typing import Literal
 
 import anthropic
 import pandas as pd
@@ -22,7 +27,8 @@ from src.strategy.features import LGBMSignalModel, build_training_dataset
 
 logger = logging.getLogger(__name__)
 
-LGBM_THRESHOLD = 0.55  # minimum LightGBM probability to allow a BUY
+LGBM_THRESHOLD   = 0.55   # minimum LightGBM probability to allow a BUY (choppy regime)
+VOL_RATIO_THRESH = 1.5    # 20d vol / 60d-avg-vol threshold defining 'choppy'
 
 _client: anthropic.Anthropic | None = None
 _lgbm_model: LGBMSignalModel | None = None
@@ -51,6 +57,42 @@ def init_lgbm_filter(price_data: dict[str, pd.DataFrame]) -> None:
         "LightGBM filter ready. Mean CV AUC: %.4f",
         sum(model.cv_scores_) / len(model.cv_scores_),
     )
+
+
+def get_market_regime(spy_close: pd.Series) -> Literal["trending", "choppy"]:
+    """Classify current market regime using SPY volatility ratio.
+
+    Definition:
+      20d_vol  = rolling 20-day std of SPY daily returns (latest value)
+      60d_avg  = rolling 60-day mean of that 20d_vol series (latest value)
+      regime   = 'choppy'   if 20d_vol > VOL_RATIO_THRESH * 60d_avg
+               = 'trending' otherwise
+
+    Defaults to 'trending' (gate open) when there is insufficient data or
+    the calculation cannot be completed.
+    """
+    returns = spy_close.ffill().pct_change(fill_method=None).dropna()
+    if len(returns) < 80:
+        logger.debug("get_market_regime: insufficient SPY data (%d rows) — default trending", len(returns))
+        return "trending"
+
+    vol_20d     = returns.rolling(20).std()
+    vol_60d_avg = vol_20d.rolling(60).mean()
+
+    current_vol = vol_20d.iloc[-1]
+    avg_vol     = vol_60d_avg.iloc[-1]
+
+    if pd.isna(current_vol) or pd.isna(avg_vol) or avg_vol == 0:
+        logger.debug("get_market_regime: NaN or zero in vol calculation — default trending")
+        return "trending"
+
+    ratio  = current_vol / avg_vol
+    regime: Literal["trending", "choppy"] = "choppy" if ratio > VOL_RATIO_THRESH else "trending"
+    logger.info(
+        "Market regime: %s (20d_vol=%.4f, 60d_avg=%.4f, ratio=%.2fx)",
+        regime.upper(), current_vol, avg_vol, ratio,
+    )
+    return regime
 
 
 def apply_lgbm_gate(symbol: str, df: pd.DataFrame) -> tuple[float, bool]:
@@ -95,6 +137,7 @@ Rules:
 - Prefer HOLD when confidence < 0.6
 - Cite specific data points in your reasoning
 - lgbm_proba in market_context is the LightGBM confirmation probability (>= 0.55 means ML agrees)
+- market_regime in market_context is 'trending' (gate open) or 'choppy' (gate active)
 """
 
 
@@ -104,34 +147,52 @@ def evaluate_signal(
     market_context: dict,
     portfolio_state: dict,
     df: pd.DataFrame | None = None,
+    spy_close: pd.Series | None = None,
 ) -> dict:
-    """Evaluate a trading signal with LightGBM gate + Claude reasoning.
+    """Evaluate a trading signal with regime-conditional LightGBM gate + Claude reasoning.
 
-    For BUY signals: LightGBM is checked first. If proba < LGBM_THRESHOLD the
-    signal is immediately downgraded to HOLD without spending a Claude API call.
-    For SELL/HOLD signals: LightGBM gate is skipped (never blocks exits).
+    Gate behaviour for BUY signals:
+      - 'trending' regime (SPY vol normal):  gate OPEN — BUY goes straight to Claude.
+      - 'choppy'  regime (SPY vol elevated): gate ACTIVE — blocked if proba < LGBM_THRESHOLD.
+
+    SELL/HOLD signals always bypass the gate — exits are never blocked.
     """
     lgbm_proba: float = 1.0
+    regime = "trending"
 
-    if strategy_signal.upper() == "BUY" and df is not None:
-        lgbm_proba, passes = apply_lgbm_gate(symbol, df)
-        if not passes:
-            logger.info(
-                "LGBM gate BLOCKED %s BUY — proba=%.3f < threshold=%.2f",
-                symbol, lgbm_proba, LGBM_THRESHOLD,
-            )
-            return {
-                "action": "HOLD",
-                "confidence": lgbm_proba,
-                "reasoning": (
-                    f"LightGBM confirmation filter blocked entry: "
-                    f"proba={lgbm_proba:.3f} < threshold={LGBM_THRESHOLD}. "
-                    "Momentum signal present but ML does not confirm."
-                ),
-                "risk_factors": ["lgbm_confirmation_failed"],
-            }
+    if strategy_signal.upper() == "BUY":
+        # Determine regime first
+        if spy_close is not None:
+            regime = get_market_regime(spy_close)
+        else:
+            logger.debug("evaluate_signal: no spy_close provided — regime defaults to 'trending'")
 
-    market_context = {**market_context, "lgbm_proba": round(lgbm_proba, 4)}
+        # Apply gate only in choppy regime
+        if regime == "choppy" and df is not None:
+            lgbm_proba, passes = apply_lgbm_gate(symbol, df)
+            if not passes:
+                logger.info(
+                    "LGBM gate BLOCKED %s BUY (choppy regime) — proba=%.3f < threshold=%.2f",
+                    symbol, lgbm_proba, LGBM_THRESHOLD,
+                )
+                return {
+                    "action": "HOLD",
+                    "confidence": lgbm_proba,
+                    "reasoning": (
+                        f"LightGBM gate blocked entry in choppy regime: "
+                        f"proba={lgbm_proba:.3f} < threshold={LGBM_THRESHOLD}. "
+                        "Momentum signal present but ML does not confirm under elevated volatility."
+                    ),
+                    "risk_factors": ["lgbm_confirmation_failed", "choppy_regime"],
+                }
+        elif regime == "trending":
+            logger.debug("LGBM gate OPEN for %s — trending regime, no filter applied", symbol)
+
+    market_context = {
+        **market_context,
+        "lgbm_proba": round(lgbm_proba, 4),
+        "market_regime": regime,
+    }
 
     prompt = f"""
 Symbol: {symbol}
