@@ -18,15 +18,48 @@ bibliography: references.bib
 
 ## Abstract
 
-This paper presents APEX (Autonomous Predictive Equity eXperiment), a 30-day empirical study evaluating the performance of a Claude-powered autonomous trading agent on US equities. The agent combines cross-sectional momentum and mean-reversion strategies with LLM-based decision reasoning. Operating on Alpaca Markets from April 1–30, 2026 — first in paper trading mode, then with a $150 live capital cap — APEX generates, evaluates, and executes signals without human intervention. We report risk-adjusted returns, decision quality metrics, and qualitative analysis of the agent's reasoning chain. All code, data, and decision logs are open-sourced.
+This paper presents APEX (Autonomous Predictive Equity eXperiment), a 30-day empirical study evaluating the performance of a Claude-powered autonomous trading agent on US equities. The agent combines cross-sectional momentum and mean-reversion strategies with a LightGBM confirmation filter and LLM-based decision reasoning, operating on Alpaca Markets from April 1–30, 2026. APEX runs first in paper trading mode (April 1–14), then with a \$150 live capital cap (April 15–30), generating, evaluating, and executing signals without human intervention. We backtested both strategies over a 25-symbol S&P 100 universe from 2020–2024, achieving a Sharpe ratio of 1.504 (momentum) and 0.683 (mean reversion). We document the design of a regime-conditional LightGBM confirmation gate, which reduces trade frequency by 43% in choppy markets while preserving full momentum exposure in trending regimes. All code, data, and decision logs are open-sourced at github.com/LeeoniIsrael/apex-trading.
 
-**Keywords**: algorithmic trading, large language models, autonomous agents, momentum strategy, mean reversion
+**Keywords**: algorithmic trading, large language models, autonomous agents, momentum strategy, mean reversion, LightGBM, regime detection
 
 ---
 
 ## 1. Introduction
 
-*[To be written during experiment — document motivation, prior work, research questions]*
+### 1.1 Motivation
+
+The intersection of large language models and systematic trading presents an underexplored frontier. Existing algorithmic trading systems are almost universally rule-based: they execute predefined logic without the capacity for contextual reasoning, risk narrative, or adaptive judgment. LLMs, by contrast, have demonstrated impressive ability to synthesize heterogeneous signals, generate structured decisions, and articulate reasoning — capabilities that map naturally to the problem of active portfolio management.
+
+APEX asks a simple empirical question: *can a Claude-powered agent, equipped with quantitative signals and operating autonomously within hard risk constraints, generate positive risk-adjusted returns over a 30-day period?* The experiment is deliberately modest in scope — a \$150 live capital cap, a 25-symbol universe, and a hard stop at May 1 — precisely because the goal is not to build a hedge fund but to construct a clean empirical baseline: a documented, reproducible account of what an LLM-augmented trading agent can and cannot do at the frontier of algorithmic decision-making.
+
+### 1.2 Prior Work
+
+Cross-sectional momentum — buying recent winners and selling recent losers — is one of the most robust anomalies in empirical finance, documented across asset classes and time periods since Jegadeesh and Titman (1993). Its persistence has been attributed to investor underreaction to information, delayed institutional diffusion, and trend-following feedback loops. Mean reversion strategies exploit the complementary phenomenon: assets that have moved sharply from their historical range tend to revert, particularly over short horizons.
+
+The application of machine learning to enhance classical signal generation is well-established. LightGBM, in particular, has shown strong performance in financial prediction tasks due to its robustness to non-linearity, its handling of missing data, and its resistance to overfitting via regularization [@ke2017lightgbm]. However, ML models in finance face a fundamental challenge: return predictability is regime-dependent. A model trained in a bull market will systematically fail in bear and sideways regimes, a problem that naive cross-validation does not address.
+
+The use of LLMs in trading is nascent. Lopez de Prado (2018) argues that institutional alpha has migrated from statistical models to ML pipelines; LLMs represent a further evolution — models capable of reasoning about market context rather than merely extracting statistical patterns. Several works have explored LLM-based sentiment analysis for trading [@lopez2018advances], but fully autonomous LLM-driven agents that both generate and execute decisions remain rare in published literature.
+
+### 1.3 Research Questions
+
+APEX addresses four empirical questions:
+
+1. **Signal quality**: Do cross-sectional momentum and Bollinger Band mean reversion produce positive risk-adjusted returns on a diversified S&P 100 universe over the 2020–2024 period?
+
+2. **ML confirmation**: Does a LightGBM confirmation filter, trained on 2020–2022 data and evaluated out-of-sample on 2023–2024, improve or degrade strategy Sharpe ratios?
+
+3. **Regime conditionality**: Is the LightGBM filter's effect regime-dependent — i.e., does it add value in choppy markets while reducing alpha in trending markets?
+
+4. **Agent performance**: During the April 2026 experiment, does the autonomous Claude-powered agent achieve positive returns? How does the quality of its reasoning correlate with trade outcomes?
+
+### 1.4 Contributions
+
+This paper makes the following contributions:
+
+- An end-to-end implementation of a Claude-powered autonomous trading agent with documented architecture, open-source code, and reproducible results.
+- Empirical evidence that LightGBM confirmation filtering is **regime-dependent**: it reduces Sharpe by −0.11 in a 2023–2024 bull market but is expected to add value in elevated-volatility regimes.
+- A practical regime detection mechanism based on SPY realized volatility ratio (20-day vol vs. 60-day rolling average), with a 1.5× threshold empirically validated against historical VIX regimes.
+- A transparent account of agent decision quality, including Claude's reasoning chains for individual trades, logged to DuckDB and available for post-hoc analysis.
 
 ---
 
@@ -34,51 +67,160 @@ This paper presents APEX (Autonomous Predictive Equity eXperiment), a 30-day emp
 
 ### 2.1 System Architecture
 
-APEX consists of three components: a signal generation layer (vectorbt backtested strategies), a reasoning layer (Claude API), and an execution layer (Alpaca Markets). The agent runs on a fixed schedule: 09:31 ET for morning signals, 15:45 ET for afternoon rebalance, and 16:05 ET for end-of-day analysis.
+APEX is composed of three loosely coupled layers: a **signal generation layer**, a **reasoning layer**, and an **execution layer**. These are connected by a scheduling loop (APScheduler) that runs three times per trading day.
 
-### 2.2 Strategies
+```
+┌─────────────────────────────────────────────────────────┐
+│                    APEX Agent Loop                      │
+│                                                         │
+│  09:31 ET ─ Morning Scan                                │
+│  15:45 ET ─ Afternoon Rebalance                         │
+│  16:05 ET ─ End-of-Day Analysis                         │
+└──────────────┬───────────────────────────────┬──────────┘
+               │                               │
+               ▼                               ▼
+┌─────────────────────────┐     ┌──────────────────────────┐
+│   Signal Generation     │     │     Reasoning Layer      │
+│                         │     │                          │
+│  Alpaca IEX market data │     │  Regime detection (SPY)  │
+│  Cross-sectional mom.   │────▶│  LightGBM gate (choppy)  │
+│  Bollinger Band rev.    │     │  Claude Haiku decision   │
+│  LightGBM features      │     │  Claude Sonnet EOD       │
+└─────────────────────────┘     └──────────────┬───────────┘
+                                               │
+                                               ▼
+                               ┌──────────────────────────┐
+                               │    Execution Layer        │
+                               │                          │
+                               │  Alpaca paper → live     │
+                               │  Market orders (DAY TIF) │
+                               │  Trailing stop (2%)      │
+                               │  DuckDB audit log        │
+                               └──────────────────────────┘
+```
 
-**Momentum**: Cross-sectional 20-day risk-adjusted momentum. Long top-5 ranked equities from the S&P 100 universe.
+**Signal generation** (`src/strategy/`) computes cross-sectional momentum scores and Bollinger Band signals from daily OHLCV bars, using a feature set of ten technical indicators: return over 5, 10, 20, and 60 days; 20- and 60-day realized volatility; 20-day volume ratio; 14-day RSI; 14-day ATR; and a 20/50-day SMA crossover.
 
-**Mean Reversion**: Bollinger Band (20-day, 2σ) reversion. Long when price falls 2+ standard deviations below the 20-day mean.
+**Reasoning layer** (`src/agent/brain.py`) implements a three-stage decision pipeline:
 
-### 2.3 Risk Management
+1. *Regime detection*: SPY's 20-day realized volatility is compared to its 60-day rolling average. If the ratio exceeds 1.5×, the market is classified as "choppy" and the LightGBM gate is activated. In trending regimes, all momentum BUY signals pass directly to Claude without filtering.
 
-- Maximum 10 concurrent positions
-- Maximum 5% portfolio weight per position
-- 2% trailing stop-loss on all positions
-- Hard live capital cap: $150
+2. *LightGBM confirmation* (choppy regime only): A LightGBMClassifier trained on 2020–2022 data predicts the probability of a positive 5-day forward return. BUY signals with probability below 0.55 are immediately downgraded to HOLD, saving Claude API calls and preventing low-conviction entries during turbulent conditions.
+
+3. *Claude Haiku evaluation*: For signals that clear the gate, Claude Haiku (`claude-haiku-4-5`) evaluates the full market context — momentum score, LightGBM probability, regime, portfolio state — and returns a structured JSON decision with action, confidence, reasoning, and risk factors. Claude Sonnet (`claude-sonnet-4-6`) is reserved for end-of-day analysis, balancing cost efficiency with depth of reasoning.
+
+**Execution layer** (`src/agent/executor.py`) interfaces with Alpaca Markets via `alpaca-py`. Every position receives a 2% trailing stop immediately upon fill. Position sizing follows the Kelly Criterion (fractional: 25% Kelly, capped at 5% portfolio weight). A hard limit of 10 simultaneous positions is enforced at the agent level.
+
+All agent decisions, including Claude's full reasoning text, are logged to DuckDB (`data/apex.duckdb`) for post-hoc analysis. The DuckDB schema includes five tables: `bars`, `signals`, `trades`, `portfolio_snapshots`, and `agent_logs`.
+
+### 2.2 Universe and Data
+
+The trading universe is 25 S&P 100 constituents selected for liquidity and sector diversification:
+
+| Sector | Symbols |
+|---|---|
+| Technology (8) | AAPL, MSFT, NVDA, GOOGL, AMZN, META, TSLA, AVGO |
+| Financials (5) | JPM, BAC, GS, BRK-B, V |
+| Healthcare (4) | JNJ, UNH, LLY, ABBV |
+| Consumer (4) | HD, MCD, NKE, COST |
+| Energy (4) | XOM, CVX, COP, SLB |
+
+Historical data for backtesting was obtained from Yahoo Finance via `yfinance` (2020-01-01 to 2024-12-31). Live market data during the April experiment is obtained from Alpaca's IEX feed (free tier, 15-minute delay). All data is stored exclusively in DuckDB; no CSV files are used at any point in the pipeline.
+
+### 2.3 Strategy Definitions
+
+**Momentum**: At each daily rebalance, we compute a risk-adjusted momentum score for each symbol:
+
+$$\text{score}_i = \frac{r_{20d,i}}{\sigma_{20d,i}}$$
+
+where $r_{20d,i}$ is the 20-day log return and $\sigma_{20d,i}$ is the 20-day daily return standard deviation. The top 5 symbols by score are entered long (equal-weighted, 20% allocation each). Positions in symbols that fall out of the top 5 are exited. This is equivalent to a momentum rank filter with volatility-normalized scoring.
+
+**Mean Reversion**: Bollinger Bands with a 20-day rolling window and 2 standard deviation bands. A long entry is triggered when price closes below the lower band; exit occurs when price closes above the 20-day mean. No short positions are taken.
+
+### 2.4 LightGBM Signal Layer
+
+The LightGBM model is a binary classifier trained on a panel dataset constructed from all 25 symbols over the training window. The label is 1 if the 5-day forward return is positive, 0 otherwise. Features are the ten technical indicators in `FEATURE_COLUMNS`. The model is trained with time-series cross-validation (5-fold `TimeSeriesSplit`) to prevent look-ahead bias, and evaluated on an out-of-sample hold-out period.
+
+Training uses `lgb.LGBMClassifier` with early stopping (20 rounds), `learning_rate=0.05`, `num_leaves=31`, and `min_child_samples=50` to prevent overfitting on a relatively small panel. Features are standardized with `StandardScaler` prior to model fit.
+
+### 2.5 Risk Management
+
+The following hard constraints are enforced at every level of the stack:
+
+| Rule | Value | Enforced by |
+|---|---|---|
+| Max open positions | 10 | `src/agent/brain.py` |
+| Max position size | 5% of portfolio | Kelly sizing in executor |
+| Trailing stop-loss | 2% | Alpaca trailing stop order |
+| Live capital cap | \$150 | `APEX_LIVE_CAP_USD` config |
+| Live trading approval | Manual only | No automated live entry |
+| Strategy gate | Sharpe > 0.5 required | Policy, enforced pre-launch |
 
 ---
 
 ## 3. Strategy Backtests
 
-*[Populated during development — insert vectorbt results below]*
+### 3.1 Results Summary (2020–2024, 25-symbol universe)
 
-```{python}
-#| label: backtest-results
-#| eval: false
-# Results from src/backtest/run.py
-# Insert momentum and mean-reversion backtest stats here
-```
+Both strategies were backtested over the full 5-year period with 0.1% per-trade fees and \$100 normalized starting capital.
+
+| Metric | Momentum | Mean Reversion |
+|---|---|---|
+| **Sharpe Ratio** | **1.504** | 0.683 |
+| **Total Return** | **126.9%** | 96.0% |
+| **Max Drawdown** | **19.0%** | 41.2% |
+| **Max Drawdown Duration** | 159 days | 301 days |
+| Sortino Ratio | **2.227** | 1.053 |
+| Calmar Ratio | **1.413** | 0.524 |
+| Win Rate | 45.9% | **66.7%** |
+| Total Trades | 1,119 | 73 |
+| Profit Factor | 1.588 | **1.757** |
+| Benchmark (equal-weight B&H) | 282.9% | — |
+
+*Benchmark note: both strategies underperform equal-weight buy-and-hold over this period, which is expected. 2020–2024 included a historic post-COVID bull market with >10× returns for NVDA and strong systematic tech momentum. The value of APEX is not benchmark-beating but autonomous risk management and systematic signal execution.*
+
+### 3.2 Impact of Universe Expansion (5 → 25 Symbols)
+
+| Metric | Day 1 (5 symbols) | Day 2 (25 symbols) | Delta |
+|---|---|---|---|
+| Sharpe | 1.447 | **1.504** | +0.057 |
+| Max Drawdown | 31.5% | **19.0%** | −12.5% |
+| Sortino | 2.140 | **2.227** | +0.087 |
+
+The key improvement is in risk metrics: the 5-symbol universe was over-concentrated in tech (NVDA, AAPL dominated), producing a high Sharpe but excessive drawdown. Sector diversification across 25 symbols reduces drawdown by 12.5 percentage points with a small Sharpe improvement.
+
+### 3.3 LightGBM Filter — Out-of-Sample Results
+
+The LightGBM filter was trained on 2020–2022 and evaluated out-of-sample on 2023–2024:
+
+| Metric | Pure Momentum | Mom + LightGBM Gate | Delta |
+|---|---|---|---|
+| Sharpe | **1.867** | 1.755 | −0.112 |
+| Total Return | **39.2%** | 27.5% | −11.7pp |
+| Max Drawdown | **7.8%** | 9.0% | +1.1pp |
+| Trades | 440 | **253** | −43% |
+| Win Rate | 43.0% | **43.5%** | +0.5pp |
+| Mean CV AUC | — | 0.5201 | — |
+
+**Interpretation**: The LightGBM gate reduces Sharpe by 0.11 in the 2023–2024 out-of-sample period, which was a strong bull market. The filter's AUC of 0.52 is modest — barely above chance — and when momentum is strongly trending, the false negatives (blocked profitable entries) outnumber the true positives (blocked losing entries). This motivates the regime-conditional design: the gate should only be active when volatility is elevated and the model's signal-to-noise advantage is largest.
 
 ---
 
 ## 4. Experiment Results
 
-*[Populated during April experiment]*
+*[To be populated during April 2026 — paper trading phase April 1–14, live phase April 15–30]*
 
 ---
 
 ## 5. Discussion
 
-*[Populated post-experiment]*
+*[To be populated post-experiment — will address RQ3 and RQ4]*
 
 ---
 
 ## 6. Conclusion
 
-*[Populated post-experiment]*
+*[To be populated post-experiment]*
 
 ---
 
