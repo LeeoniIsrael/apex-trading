@@ -299,19 +299,21 @@ def get_trades_summary() -> str:
         except Exception:
             pass
 
-    if not seen:
-        return "No trades on record yet."
+    # Keep only live trades
+    live = {k: v for k, v in seen.items() if not v.get("paper", True)}
+    if not live:
+        return "No live trades placed yet."
 
     rows = []
     total_bet    = 0.0
     total_payout = 0.0
 
-    for pos in seen.values():
+    for pos in live.values():
         bet         = pos["bet_usd"]
         price       = pos["price_cents"]
         side        = pos["side"].upper()
         title       = pos["title"].replace(" Winner?", "").replace(" winner?", "")[:50]
-        tag         = "[P]" if pos["paper"] else "[L]"
+        tag         = "[L]"
 
         contracts   = round(bet / (price / 100))
         payout      = round(contracts * 1.00, 2)
