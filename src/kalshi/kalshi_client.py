@@ -141,13 +141,18 @@ class KalshiClient:
                     all_markets.append(m)
 
         # ── Source 1: /events → KX long-form universe, cycled by category ──────
-        _CATEGORIES = ["sports", "crypto", "economics", "politics"]
+        # Keywords chosen to prioritise same-day resolution markets
+        _CATEGORIES = [
+            "sports", "crypto", "economics", "politics",
+            "bitcoin", "fed", "inflation", "weather",
+            "nfl", "nba", "nhl", "mlb", "soccer",
+        ]
         for category in _CATEGORIES:
             try:
                 events_data = self._get("/events", params={
-                    "limit": 25, "status": status, "category": category,
+                    "limit": 15, "status": status, "category": category,
                 })
-                for event in events_data.get("events", [])[:10]:
+                for event in events_data.get("events", [])[:5]:
                     try:
                         detail = self._get(f"/events/{event['event_ticker']}")
                         _add(detail.get("markets", []),

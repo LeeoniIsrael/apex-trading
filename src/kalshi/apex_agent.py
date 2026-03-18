@@ -49,8 +49,8 @@ KELLY_FRACTION = float(os.getenv("KELLY_FRACTION", "0.35"))
 MAX_POSITION_PCT = float(os.getenv("MAX_POSITION_PCT", "0.05"))
 MAX_POSITIONS = 10
 MIN_VOLUME = 100
-MIN_HOURS_TO_CLOSE = 0.5   # 30 minutes
-MAX_DAYS_TO_CLOSE = 14
+MIN_HOURS_TO_CLOSE = 1.0   # at least 1 hour before close
+MAX_DAYS_TO_CLOSE = 1      # same-day resolution only (within 24 hours)
 
 
 def _get_client() -> KalshiClient:
@@ -191,7 +191,9 @@ def scan_markets() -> None:
                         ticker, hours_left / 24, MAX_DAYS_TO_CLOSE, close_time)
             continue
 
-        logger.info("PASS %s — volume=%d hours_left=%.1f → sending to brain", ticker, volume, hours_left)
+        category = market.get("_event_category") or market.get("category", "unknown")
+        logger.info("PASS %s — category=%s volume=%d hours_left=%.1fh → sending to brain",
+                    ticker, category, volume, hours_left)
 
         # Small delay to avoid Anthropic rate limits when scanning many markets
         import time as _time

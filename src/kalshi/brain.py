@@ -32,6 +32,10 @@ bets under 25 cents (longshots lose more than implied). Prefer high-confidence m
 priced between 55-85 cents where the edge is most reliable. Only recommend BUY when \
 your estimated probability exceeds market price by at least 7%.
 
+Prioritize markets that resolve within 24 hours. Crypto price markets, economic data \
+releases, and sports games all qualify. Spread bets across different categories — do \
+not place more than 3 bets in any single category per scan cycle.
+
 Return ONLY valid JSON, no markdown, no explanation outside the JSON.
 """
 
