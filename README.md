@@ -1,293 +1,194 @@
-# APEX — Autonomous Predictive Equity eXperiment
+# APEX — Autonomous Prediction EXchange
 
-**A 30-day live experiment: can a Claude-powered trading agent make disciplined, documented, risk-managed decisions in real markets?**
+**A fully autonomous Kalshi prediction market trading agent, running live on a Hetzner VPS. Powered by Claude Haiku. Managed by a two-way Telegram bot named Little Lio Trader.**
 
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![Build](https://img.shields.io/badge/Build-Passing-brightgreen?style=flat-square)
-![Status](https://img.shields.io/badge/Status-Build%20Phase%20%E2%80%94%20March%202026-orange?style=flat-square)
-![Experiment](https://img.shields.io/badge/Experiment%20Start-April%201%202026-blueviolet?style=flat-square)
+![Status](https://img.shields.io/badge/Status-Paper%20Trading%20Live-brightgreen?style=flat-square)
+![Mode](https://img.shields.io/badge/Mode-PAPER-orange?style=flat-square)
+![Bankroll](https://img.shields.io/badge/Bankroll-%24150-blue?style=flat-square)
+
+**[Live Dashboard →](https://apex-trading-apex.netlify.app)**
 
 ---
 
-## Overview
+## What APEX Does
 
-APEX is a fully autonomous algorithmic trading system built in 30 days as a structured experiment. A Claude-powered reasoning layer evaluates equity signals, makes position decisions, logs its own thinking to a database, and generates a daily journal — all without human intervention during market hours. What separates this from a weekend trading bot is the architecture: three interconnected pillars (trading agent, research paper, documentation engine) that treat the experiment itself as a product. Every trade made in April is a data point. Every data point becomes a paragraph in a peer-reviewable paper. The entire build is conducted in public, committed daily, and concluded on May 1.
+APEX scans Kalshi prediction markets every 15 minutes. For each market that passes volume and time filters, it calls Claude Haiku with real-time web search to estimate the true probability of the outcome. If Claude finds a ≥5% edge over the market price with ≥60% confidence, it sizes a bet using the Kelly Criterion and places it — or logs it as a paper trade.
 
----
-
-## What Makes This Different
-
-Most trading repos on GitHub are one of three things: a backtest script with a promising README, a live bot with no risk controls, or a research notebook that never touched real capital. APEX is none of those.
-
-- **LLM reasoning layer, not just signals** — Claude evaluates each trade signal in context: current portfolio state, market regime, recent performance. The decision *and the reasoning* are logged to DuckDB on every tick. You can query why the agent did anything.
-- **Congressional trade tracking via Unusual Whales** *(planned, Week 2)* — institutional and congressional trading data as an alternative signal layer. Retail strategies using the same information that moves markets.
-- **Real money on the line** — paper trading April 1–14, then a live decision point on April 15 with a hard $150 cap. The experiment has stakes.
-- **Three-pillar architecture** — the agent, the paper, and the journal are not separate concerns. They share the same database. The paper writes itself from trade logs.
-- **Fully auditable** — every order, signal, and reasoning string is persisted. Every day's session is committed. Every decision can be replayed.
-- **Academic output** — this ends with a Quarto-rendered research paper targeting quantitative finance practitioners, not a Medium post.
+The whole thing runs unattended on a Hetzner server. You can query it, pause it, and get briefings from Telegram.
 
 ---
 
 ## Architecture
 
-APEX is built around three interconnected pillars that share a single DuckDB database.
-
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         APEX SYSTEM                             │
-│                                                                 │
-│  ┌─────────────────────┐      ┌──────────────────────────────┐  │
-│  │   TRADING AGENT     │      │     DOCUMENTATION ENGINE     │  │
-│  │                     │      │                              │  │
-│  │  APScheduler loop   │      │  Daily journal (auto)        │  │
-│  │  ├─ 09:31 scan      │      │  ├─ docs/journal/YYYY-MM-DD  │  │
-│  │  ├─ 15:45 rebalance │      │  └─ Quarto → devlog posts    │  │
-│  │  └─ 16:05 EOD       │      │                              │  │
-│  │                     │      │  Triggered by: EOD hook      │  │
-│  │  brain.py           │      │  Input: DuckDB trade logs    │  │
-│  │  └─ Claude haiku    │      └──────────────────────────────┘  │
-│  │     (tick decisions)│                    │                   │
-│  │  Claude sonnet      │                    │                   │
-│  │     (EOD analysis)  │                    ▼                   │
-│  │                     │      ┌──────────────────────────────┐  │
-│  │  executor.py        │      │      RESEARCH PAPER          │  │
-│  │  └─ Alpaca Markets  │      │                              │  │
-│  └──────────┬──────────┘      │  docs/paper/index.qmd        │  │
-│             │                 │  Quarto → PDF + HTML         │  │
-│             ▼                 │                              │  │
-│  ┌─────────────────────┐      │  Updated when:               │  │
-│  │      DuckDB         │─────▶│  ├─ strategy backtested      │  │
-│  │   apex.duckdb       │      │  ├─ paper trade begins       │  │
-│  │                     │      │  └─ significant event        │  │
-│  │  bars               │      │                              │  │
-│  │  signals            │      │  All figures generated from  │  │
-│  │  trades             │      │  embedded DuckDB queries     │  │
-│  │  portfolio_snapshots│      └──────────────────────────────┘  │
-│  │  agent_logs         │                                        │
-│  └─────────────────────┘                                        │
+│                      HETZNER CX22 VPS                           │
+│                    178.156.159.178                               │
+│                                                                  │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  apex_agent.py  (PM2 id=7, process: apex-agent)          │   │
+│  │                                                          │   │
+│  │  APScheduler ──► scan_markets() every 15 minutes        │   │
+│  │       │                                                  │   │
+│  │       ├──► KalshiClient ──────────────► Kalshi REST v2  │   │
+│  │       │    RSA-PSS-SHA256 auth          (get markets,    │   │
+│  │       │                                 place orders)    │   │
+│  │       │                                                  │   │
+│  │       ├──► brain.py ────────────────► Claude Haiku       │   │
+│  │       │    analyze_market()            haiku-4-5         │   │
+│  │       │    + web_search (2 uses)       web_search tool   │   │
+│  │       │                                                  │   │
+│  │       ├──► kelly.py                                      │   │
+│  │       │    0.25x Kelly, 5% cap                           │   │
+│  │       │                                                  │   │
+│  │       └──► telegram_notify.py ──────► Telegram Bot       │   │
+│  │            Little Lio Trader           (two-way)         │   │
+│  │            outbound alerts                               │   │
+│  │            inbound commands (long poll)                  │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                                                                  │
+│  /opt/apex/trades.log    /opt/apex/paused.flag                   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Data flow**: Alpaca → DuckDB (bars) → Strategy signals → Claude reasoning → Alpaca orders → DuckDB (trades) → Journal + Paper
+---
+
+## How It Works
+
+### Scan Cycle (every 15 minutes)
+
+1. **Filter** — fetch top 20 markets by volume from Kalshi (events + short-term series). Skip anything with volume < 50, closing in < 1 hour, or closing > 14 days out.
+2. **Analyze** — for each passing market, call Claude Haiku with a structured prompt. Claude does a web search for recent news, estimates the true probability, and returns `BUY_YES`, `BUY_NO`, or `SKIP` with edge and confidence scores.
+3. **Size** — if edge ≥ 5% and confidence ≥ 60%, calculate bet size via fractional Kelly (0.25×), capped at 5% of bankroll per position. Max 10 positions simultaneously.
+4. **Execute** — in paper mode: log to `trades.log`. In live mode: place a limit order via Kalshi REST API.
+5. **Notify** — send a Telegram alert with the market, side, amount, and reasoning.
+
+### Paper vs Live Mode
+
+Controlled by `APEX_ENV` in `/opt/apex/.env`. In paper mode, `place_order()` returns a mock `PAPER-{timestamp}` order ID and logs the trade. No real money moves.
 
 ---
 
 ## Tech Stack
 
-Every tool here was chosen deliberately. The alternatives are listed.
-
-| Layer | Tool | Version | Why this, not X |
-|---|---|---|---|
-| Language | Python | 3.12 | Undisputed standard for quant finance. No alternatives seriously considered. |
-| Package manager | `uv` | 0.10+ | 10–100× faster than pip. Manages Python versions. No Poetry overhead. |
-| Broker / execution | Alpaca Markets | — | Free paper trading, real-time data, clean Python SDK. IBKR is more powerful but weeks to set up. |
-| Backtesting | vectorbt | 0.28 | NumPy/Numba-accelerated. 100× faster than backtrader (which is no longer maintained). |
-| Database | DuckDB | 1.4 | Zero-config columnar storage. Handles OHLCV natively. No Postgres infra to spin up. |
-| ML signals | LightGBM + scikit-learn | — | Faster than XGBoost, more interpretable. Proven on financial factor data. |
-| Agent reasoning | Claude API (`claude-haiku-4-5`) | — | Haiku for tick decisions (cost efficiency); sonnet for EOD analysis. Every decision logged. |
-| Scheduler | APScheduler | 3.11 | Cron-style scheduling inside Python. Gated to April 1 – May 1 experiment window. |
-| Dashboard | Streamlit | 1.55 | Live trading monitor in 20 lines of Python. Dash is better at scale; Streamlit is better right now. |
-| Paper & journal | Quarto | 2.x | Code + math + narrative → PDF and HTML from one source. Jupyter Book is declining. |
-| Config / secrets | Pydantic Settings | 2.x | Type-safe `.env` parsing. No raw `os.environ` calls anywhere in the codebase. |
-| Testing | pytest | 9.x | Standard. `tests/` mirrors `src/`. Must pass before every commit. |
-| Data feed | yfinance + Alpaca | — | yfinance for backtest history; Alpaca live feed for real-time during experiment. |
+| Layer | Tool | Notes |
+|---|---|---|
+| Language | Python 3.12 | |
+| Agent framework | APScheduler | 15min scan + 9am daily summary |
+| LLM brain | Claude Haiku (`haiku-4-5-20251001`) | web_search enabled, 2 uses per market |
+| Market API | Kalshi REST API v2 | RSA-PSS-SHA256 auth |
+| Position sizing | Kelly Criterion | 0.25× fractional, 5% cap |
+| Telegram bot | python-telegram-bot 22.x | long polling, two-way, 9 commands |
+| Database | DuckDB | trade logging (planned expansion) |
+| Process manager | PM2 | id=7, restart on crash |
+| Server | Hetzner CX22 | Ubuntu 22.04, 2 vCPU, 4GB RAM |
+| Dashboard | Netlify (static HTML) | apex-trading-apex.netlify.app |
 
 ---
 
-## Experiment Timeline
+## Server File Structure
 
 ```
-March 2026          April 2026                           May 2026
-────────────────────┬───────────────────────────────────┬──────────────
-  BUILD PERIOD      │         LIVE EXPERIMENT            │  WRAP-UP
-  Mar 3 – Mar 31    │                                    │
-                    │  Apr 1 ──────── Apr 15 ─────────── May 1
-  Scaffold          │  Agent starts   Live trading       Agent stops
-  Backtest          │  (paper mode)   decision point     30-day window
-  Validate          │                 ($150 cap)         closes
-  strategies        │                 if paper phase     │
-                    │                 is profitable      │  ~May 8
-                    │                                    │  Paper
-                    │                                    │  submitted
-```
-
-**Gate rules:**
-- A strategy may not paper-trade until its backtest Sharpe ratio exceeds 0.5 over ≥1 year of data
-- The agent may not go live without explicit human confirmation — it can recommend, never unilaterally execute
-- Live exposure is hard-capped at `APEX_LIVE_CAP_USD=150`, enforced in config, not just convention
-
----
-
-## Early Results — Day 1 Backtests
-
-*Universe: SPY, QQQ, AAPL, MSFT, NVDA · Period: 2020-01-01 → 2024-12-31 · Fees: 0.1%/trade*
-
-| Metric | Momentum | Mean Reversion | Better |
-|---|---|---|---|
-| **Sharpe Ratio** | **1.447** | 0.782 | Momentum |
-| **Total Return** | **271.8%** | 77.2% | Momentum |
-| **Max Drawdown** | 31.5% | **25.9%** | Mean Rev |
-| Max DD Duration | 354 days | 391 days | Momentum |
-| **Sortino Ratio** | **2.140** | 1.189 | Momentum |
-| Calmar Ratio | **1.473** | 0.698 | Momentum |
-| Win Rate | — (open) | **78.1%** | Mean Rev |
-| Total Trades | 5 | 32 | — |
-| Profit Factor | — | **3.36** | Mean Rev |
-| Total Fees | **$0.07** | $7.95 | Momentum |
-
-*Benchmark (equal-weight buy & hold): 573.2% — a high bar in a 5-year tech bull market.*
-
-**Reading these results honestly**: momentum wins on every risk-adjusted metric that matters for April. Its low turnover (5 trades, $0.07 in fees) is particularly valuable at $150 live capital where fee drag is real. Mean reversion has a 78% win rate and lower drawdown — it's retained as a confirmation signal, not discarded. Both strategies underperform buy-and-hold because that's what buy-and-hold does in a concentrated bull run. The research question isn't "does this beat the S&P 500." It's "can an autonomous agent make disciplined, risk-managed decisions over 30 days."
-
-**Primary strategy for April:** Momentum (Sharpe 1.447 > 0.5 threshold ✓)
-
----
-
-## The Research Paper
-
-**Title**: *APEX: Autonomous Predictive Equity eXperiment — A 30-Day Empirical Study of LLM-Augmented Algorithmic Trading*
-
-**What it covers**: The paper documents the system architecture, strategy design, backtesting methodology, and live results of the April experiment. It analyzes whether Claude's reasoning layer adds measurable value over a pure signal-based approach, examines the agent's decision quality across different market regimes, and reports risk-adjusted performance with full statistical context.
-
-**Methodology**: Quarto document with embedded Python code blocks — all figures are generated directly from DuckDB queries, making every chart in the paper fully reproducible from the raw trade data. No manual chart exports, no copy-pasted numbers.
-
-**Target audience**: Quantitative finance practitioners and ML researchers. APA citations. The paper is updated live throughout the experiment and finalized ~May 8, 2026.
-
-📄 **[Read the paper (in progress)](docs/paper/index.qmd)**
-
----
-
-## Project Structure
-
-```
-apex-trading/
-│
-├── CLAUDE.md                   # AI session instructions — read this first
-├── pyproject.toml              # uv-managed dependencies
-├── pytest.ini                  # Test configuration
-├── .env.template               # Copy to .env and fill in keys
-│
-├── src/
-│   ├── config.py               # Pydantic Settings — single source of truth for all config
-│   │
-│   ├── agent/
-│   │   ├── loop.py             # APScheduler entry point — gated to Apr 1–May 1
-│   │   ├── brain.py            # Claude API reasoning layer (haiku + sonnet)
-│   │   └── executor.py        # Alpaca order execution + trailing stops
-│   │
-│   ├── strategy/
-│   │   ├── momentum.py         # Cross-sectional 20-day risk-adjusted momentum
-│   │   ├── mean_reversion.py   # Bollinger Band reversion (20-day, 2σ)
-│   │   └── features.py         # RSI, ATR, volatility, MA cross — LightGBM inputs
-│   │
-│   ├── data/
-│   │   ├── schema.py           # DuckDB schema: bars, signals, trades, snapshots, logs
-│   │   └── market.py           # Alpaca → DuckDB ingestion
-│   │
-│   ├── backtest/
-│   │   └── run.py              # vectorbt CLI runner — both strategies
-│   │
-│   └── dashboard/
-│       └── app.py              # Streamlit monitor — equity curve, trades, agent logs
-│
-├── docs/
-│   ├── paper/
-│   │   └── index.qmd           # Research paper (Quarto → PDF + HTML)
-│   └── journal/
-│       └── YYYY-MM-DD.qmd      # Daily trading journals (auto-generated by agent)
-│
-├── data/
-│   └── apex.duckdb             # All market + trade data (gitignored at scale)
-│
-└── tests/                      # Mirrors src/ — must pass before every commit
-    ├── strategy/
-    └── data/
+/opt/apex/
+├── apex_agent.py         # Main agent — scheduler entry point
+├── brain.py              # Claude Haiku decision engine
+├── kalshi_client.py      # Kalshi REST API client (RSA auth)
+├── kelly.py              # Kelly Criterion position sizer
+├── telegram_notify.py    # Outbound alerts + inbound command handler
+├── .env                  # Secrets (not in repo)
+├── kalshi_private.pem    # RSA private key for Kalshi auth
+├── trades.log            # Append-only JSON trade log
+├── apex.log              # Agent logs
+├── paused.flag           # Created by /pause, deleted by /resume
+└── venv/                 # Python virtualenv
 ```
 
 ---
 
-## Built With AI
+## Telegram Bot — Little Lio Trader
 
-This project is built with AI as a core tool, not an afterthought — and that's the point.
+The agent is controllable via a Telegram bot named **Little Lio Trader**. Only messages from `TELEGRAM_CHAT_ID` are accepted.
 
-**Claude Code** (Anthropic's CLI) runs every development session. It scaffolded the project structure, wrote the initial strategy implementations, debugged vectorbt API changes, and generated this README. It operates under `CLAUDE.md` — a project-specific instruction set that enforces hard rules: no secrets in code, no live trades without confirmation, no strategy deploys without a passing backtest.
+| Command | Response |
+|---|---|
+| `/start` | Online. Scanning Kalshi markets every 15 minutes. |
+| `/status` | Balance, open positions, P&L vs bankroll, mode |
+| `/pause` | Creates `/opt/apex/paused.flag` — agent skips scans |
+| `/resume` | Deletes the pause flag — scanning resumes |
+| `/trades` | Last 10 trades with side, size, edge |
+| `/briefing` | Today's P&L summary, win rate, trade count |
+| `/settings` | Current env, Kelly fraction, max position %, bankroll |
+| `/risk` | Open position count, total exposure, remaining bankroll |
+| `/help` | Command list |
+| *(any message)* | Routes to Claude Haiku with trade context for Q&A |
 
-**Claude API** (`claude-haiku-4-5`, `claude-sonnet-4-6`) is the agent's brain during the April experiment. Haiku evaluates individual trade signals at market open and close — fast, cheap, and sufficient for structured signal evaluation. Sonnet writes the end-of-day analysis that becomes each journal entry. Every Claude response is logged to DuckDB with the full prompt context.
-
-**The honest framing**: using AI to build a trading agent that uses AI to make trading decisions is not a gimmick. It's an experiment in whether LLMs can add judgment — not just pattern recognition — to quantitative signals. The research paper will answer whether they did.
-
-Modern engineers build with AI. The engineers who pretend otherwise are either lying or falling behind.
+**Security**: chat ID whitelist, 5 msg/min rate limit, hard block list (keys/money/env changes), input sanitization, long polling only.
 
 ---
 
-## Setup
+## Safety Features
 
-**Requirements**: Python 3.12+, [uv](https://docs.astral.sh/uv/), Alpaca Markets account (free), Anthropic API key.
+- **Paper mode default** — `APEX_ENV=paper` in `.env`. All trades are logged, none executed.
+- **Live requires explicit change** — no code path automatically switches to live.
+- **Pause flag** — `/pause` creates a file that halts the scan loop at the top of every cycle.
+- **Kelly cap** — bets are capped at 5% of bankroll regardless of Kelly output.
+- **Position limit** — max 10 open positions, enforced before each scan.
+- **Time window filter** — no markets closing in < 1 hour or > 14 days.
+- **Volume filter** — min 50 contracts traded; avoids illiquid markets.
+- **Telegram whitelist** — bot silently ignores any sender other than the configured `TELEGRAM_CHAT_ID`.
+
+---
+
+## Current Status
+
+| Item | Value |
+|---|---|
+| Mode | PAPER |
+| Bankroll | $150 |
+| Server | Online (Hetzner CX22) |
+| PM2 process | apex-agent, id=7 |
+| Scan interval | Every 15 minutes |
+| Trades placed | 2 (paper) |
+| Agent started | March 17, 2026 |
+| Paper trading until | April 15, 2026 |
+
+---
+
+## Running Your Own
+
+**Requirements**: Python 3.12+, Kalshi account + RSA key pair, Anthropic API key, Telegram bot token.
 
 ```bash
-# Clone
 git clone https://github.com/LeeoniIsrael/apex-trading.git
-cd apex-trading
+cd apex-trading/src/kalshi
 
-# Install uv if you don't have it
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# Create virtualenv and install deps
+python3 -m venv venv
+source venv/bin/activate
+pip install anthropic apscheduler python-telegram-bot requests cryptography python-dotenv
 
-# Install all dependencies (creates .venv automatically)
-uv sync
+# Configure
+cp .env.example .env
+# Fill in: KALSHI_API_KEY_ID, KALSHI_PRIVATE_KEY_PATH,
+#          ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+#          APEX_ENV=paper, APEX_BANKROLL=150
 
-# Configure secrets
-cp .env.template .env
-# Edit .env — add ALPACA_API_KEY, ALPACA_SECRET_KEY, ANTHROPIC_API_KEY
-
-# Verify everything works
-uv run pytest
-# Expected: 11 passed
+# Run
+python apex_agent.py
 ```
 
-**Run a backtest:**
+**Kalshi API key setup**: Register at kalshi.com, generate an RSA key pair in your account settings, save the private key to a `.pem` file and the key ID to `.env`.
 
-```bash
-# Momentum strategy — SPY, QQQ, AAPL, MSFT, NVDA (2020–2024)
-uv run python -m src.backtest.run --strategy momentum --symbols SPY QQQ AAPL MSFT NVDA
-
-# Mean reversion
-uv run python -m src.backtest.run --strategy mean_reversion --symbols SPY QQQ AAPL MSFT NVDA
-
-# Custom universe and date range
-uv run python -m src.backtest.run --strategy momentum \
-  --symbols SPY QQQ AAPL MSFT NVDA GOOGL AMZN META \
-  --start 2022-01-01 --end 2024-12-31
-```
-
-**Launch the dashboard:**
-
-```bash
-uv run streamlit run src/dashboard/app.py
-# Opens at http://localhost:8501
-# Shows live equity curve, trade history, and agent logs during April
-```
-
-**Note**: The trading agent (`src/agent/loop.py`) will not execute trades outside the April 1 – May 1 window. It is safe to run at any time during the build phase.
+**Telegram bot setup**: Create a bot via [@BotFather](https://t.me/botfather), copy the token to `.env`, send a message to your bot and get your chat ID from `getUpdates`.
 
 ---
 
-## Follow the Experiment
+## Links
 
-- 📓 **[Daily Journal](docs/journal/)** — every session logged, every decision explained
-- 📄 **[Research Paper](docs/paper/index.qmd)** — updated live, finalized ~May 8
-- 💻 **[Commit history](https://github.com/LeeoniIsrael/apex-trading/commits/main)** — the full build log
-
-The journal is the primary artifact during March. From April 1, the agent writes its own entries.
+- **[Live Dashboard](https://apex-trading-apex.netlify.app)** — metrics, progress, trade feed
+- **[Commit history](https://github.com/LeeoniIsrael/apex-trading/commits/main)** — daily build log
 
 ---
 
-## License & Author
-
-MIT License — use this freely, commercially or otherwise, with attribution.
-
-**Lee Israel** — building APEX as a public experiment at the intersection of quantitative finance, autonomous AI agents, and reproducible research.
-
----
-
-> **Work in progress.** This repository is updated daily through May 2026. The build phase runs through March 31. The agent goes live April 1. Results are real, documented, and honest — including the losses.
+MIT License

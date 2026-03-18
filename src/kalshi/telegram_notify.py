@@ -122,34 +122,51 @@ async def send_trade_alert(
     reasoning: str,
 ) -> bool:
     mode = os.getenv("APEX_ENV", "paper").upper()
+    yes_price = None  # price_cents not passed here; edge_pct used instead
     return await _send(
-        f"*[{mode}] Trade placed*\n"
-        f"`{market_title}`\n"
-        f"{side.upper()} — `${amount_usd:.2f}` at `{edge_pct:.1f}%` edge\n"
-        f"{reasoning}"
+        f"*[{mode}] Found something.*\n"
+        f"`{market_title}` — {side.upper()} at edge `{edge_pct:.1f}%`. "
+        f"Sizing: `${amount_usd:.2f}`.\n"
+        f"_{reasoning[:200]}_"
+    )
+
+
+async def send_trade_win(market_title: str, pnl: float) -> bool:
+    return await _send(f"That one paid. `+${pnl:.2f}` on `{market_title}`.")
+
+
+async def send_trade_loss(market_title: str, pnl: float) -> bool:
+    return await _send(
+        f"Took the loss. `-${abs(pnl):.2f}` on `{market_title}`. "
+        f"Still within drawdown limits."
     )
 
 
 async def send_daily_summary(
-    pnl: float, trades: int, win_rate: float, bankroll: float
+    pnl: float, trades: int, win_rate: float, bankroll: float, day: int = 0
 ) -> bool:
-    direction = "Up" if pnl >= 0 else "Down"
-    return await _send(
-        f"*Daily wrap*\n"
-        f"{direction} `${abs(pnl):.2f}` across `{trades}` trades. "
-        f"Win rate `{win_rate:.0%}`. Bankroll `${bankroll:.2f}`."
-    )
+    day_str = f"Day {day}. " if day else ""
+    if pnl >= 0:
+        return await _send(
+            f"{day_str}Up `${pnl:.2f}`. Win rate: `{win_rate:.0%}`. "
+            f"`{trades}` trades placed."
+        )
+    else:
+        return await _send(
+            f"{day_str}Down `${abs(pnl):.2f}`. Win rate: `{win_rate:.0%}`. "
+            f"Adjusting filters tomorrow."
+        )
 
 
 async def send_error(error_msg: str) -> bool:
-    return await _send(f"*Error*\n`{error_msg[:500]}`")
+    return await _send(f"Something broke. Checking it now.\n`{error_msg[:300]}`")
 
 
 async def send_startup(balance: float, mode: str) -> bool:
     return await _send(
         f"*Little Lio Trader*\n"
         f"Online. `{mode.upper()}` mode. Balance `${balance:.2f}`. "
-        f"Scanning every 15 minutes."
+        f"Scanning Kalshi markets every 15 minutes."
     )
 
 
@@ -175,7 +192,8 @@ def _guarded(fn):
     async def wrapper(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         if not _authorized(update):
             return
-        if _is_rate_limited(str(update.effective_chat.id)):
+        cid = str(update.effective_chat.id)
+        if _is_rate_limited(cid):
             await update.message.reply_text("Slow down.")
             return
         await fn(update, context)
@@ -187,7 +205,7 @@ def _guarded(fn):
 @_guarded
 async def _cmd_start(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     await update.message.reply_text(
-        "Online. Scanning markets every 15 minutes."
+        "Online. Scanning Kalshi markets every 15 minutes."
     )
 
 
@@ -204,18 +222,18 @@ async def _cmd_status(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
         paused    = PAUSE_FLAG.exists()
         pnl       = balance - bankroll
         n         = len(open_pos)
+        pos_str   = f"{n} position{'s' if n != 1 else ''} open"
 
         if paused:
-            state = "Paused"
-        elif pnl >= 0:
-            state = f"Up `${pnl:.2f}` so far. {n} position{'s' if n != 1 else ''} open. Looking clean."
+            text = f"Paused. {pos_str}. Balance `${balance:.2f}`."
+        elif not TRADES_LOG.exists() or TRADES_LOG.stat().st_size == 0:
+            text = f"No trades yet. Paper mode, scanning markets."
+        elif abs(pnl) < 0.01:
+            text = f"Flat. {pos_str}. Waiting for edge."
+        elif pnl > 0:
+            text = f"Up `${pnl:.2f}`. {pos_str}. Looking clean."
         else:
-            state = f"Down `${abs(pnl):.2f}`. {n} position{'s' if n != 1 else ''} open. Still within risk limits."
-
-        text = (
-            f"`{mode}` — {state}\n"
-            f"Balance: `${balance:.2f}`"
-        )
+            text = f"Down `${abs(pnl):.2f}`. {pos_str}. Still within limits."
     except Exception as e:
         text = f"Can't reach Kalshi right now. `{e}`"
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -223,21 +241,26 @@ async def _cmd_status(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
 
 @_guarded
 async def _cmd_pause(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    if PAUSE_FLAG.exists():
+        await update.message.reply_text("Already paused.")
+        return
     PAUSE_FLAG.touch()
     await update.message.reply_text("Paused. Not touching anything until you say so.")
 
 
 @_guarded
 async def _cmd_resume(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
-    if PAUSE_FLAG.exists():
-        PAUSE_FLAG.unlink()
+    if not PAUSE_FLAG.exists():
+        await update.message.reply_text("Already running.")
+        return
+    PAUSE_FLAG.unlink()
     await update.message.reply_text("Back on it.")
 
 
 @_guarded
 async def _cmd_trades(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     try:
-        if not TRADES_LOG.exists():
+        if not TRADES_LOG.exists() or not TRADES_LOG.read_text().strip():
             await update.message.reply_text("No trades on record yet.")
             return
         lines = TRADES_LOG.read_text().strip().splitlines()[-10:]
@@ -284,11 +307,9 @@ async def _cmd_briefing(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
         wins      = sum(1 for t in trades if float(t.get("edge", 0)) > 0)
         win_rate  = wins / len(trades)
         mode      = os.getenv("APEX_ENV", "paper").upper()
-        assessment = "Edge is there." if win_rate > 0.6 else "Mixed bag today."
         text = (
-            f"*Today — `{mode}`*\n"
-            f"`{len(trades)}` trades, `${total_bet:.2f}` deployed, "
-            f"`{win_rate:.0%}` win rate. {assessment}"
+            f"`{mode}` — `{len(trades)}` trades, `${total_bet:.2f}` deployed, "
+            f"`{win_rate:.0%}` win rate."
         )
     except Exception as e:
         text = f"Couldn't generate briefing. `{e}`"
@@ -330,16 +351,15 @@ async def _cmd_risk(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> N
 @_guarded
 async def _cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     await update.message.reply_text(
-        "*Commands*\n"
+        "Here is what I can do:\n\n"
         "/status — balance, positions, P&L\n"
         "/trades — last 10 trades\n"
         "/briefing — today's summary\n"
         "/risk — exposure breakdown\n"
         "/settings — current config\n"
         "/pause — stop placing bets\n"
-        "/resume — start again\n\n"
-        "_Or just ask me something._",
-        parse_mode="Markdown",
+        "/resume — resume scanning\n\n"
+        "Or just ask me something.",
     )
 
 
@@ -350,7 +370,7 @@ async def _handle_message(update: "Update", context: "ContextTypes.DEFAULT_TYPE"
     text = _sanitize(raw)
 
     if _BLOCKED_RE.search(text):
-        await update.message.reply_text("Not something I can help with.")
+        await update.message.reply_text("Not sure what you mean. Try /help.")
         return
 
     try:
@@ -368,13 +388,13 @@ async def _handle_message(update: "Update", context: "ContextTypes.DEFAULT_TYPE"
             model="claude-haiku-4-5-20251001",
             max_tokens=256,
             system=(
-                "You are Little Lio Trader, an autonomous Kalshi prediction market agent. "
-                "You speak like a sharp, composed financial assistant — think Jarvis but younger. "
-                "Direct, no filler, occasionally uses natural modern dialect. "
-                "Never mention the user's name or identity. "
-                "Always under 3 sentences. "
-                "When things are good, you're measured about it. "
-                "When things are bad, you're honest about it."
+                "You are Little Lio Trader, an autonomous Kalshi prediction market agent "
+                "running on a Hetzner server. You speak like a sharp, composed financial "
+                "assistant — think Jarvis but a 22-year-old version. Direct, no filler. "
+                "Occasionally uses natural modern dialect when it fits — not slang, not memes, "
+                "just how someone sharp actually talks. Never mention the user's name or any "
+                "personal info. Always under 3 sentences. Measured when things are good. "
+                "Honest when things are bad. Never use exclamation marks."
             ),
             messages=[{
                 "role": "user",

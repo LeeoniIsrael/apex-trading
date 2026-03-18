@@ -398,6 +398,98 @@ section{padding:100px 0}
 }
 .pill-icon{font-size:13px}
 
+/* ─── LIVE FEED ──────────────────────────────────────────────────────────── */
+#livefeed{background:var(--bg)}
+.feed-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:10px 16px;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:6px 6px 0 0;
+  margin-bottom:1px;
+  font-family:var(--font-mono);font-size:11px;
+}
+.feed-meta{display:flex;align-items:center;gap:10px;color:var(--muted)}
+.feed-dot{
+  width:8px;height:8px;border-radius:50%;
+  background:var(--mint);
+  animation:pulse-dot 2s ease-in-out infinite;
+  flex-shrink:0;
+}
+@keyframes pulse-dot{
+  0%,100%{opacity:1}
+  50%{opacity:0.3}
+}
+.feed-ts{font-family:var(--font-mono);font-size:11px;color:var(--muted)}
+.feed-list{
+  border:1px solid var(--border);border-top:none;
+  border-radius:0 0 6px 6px;
+  overflow:hidden;
+}
+.feed-card{
+  display:grid;
+  grid-template-columns:auto 1fr auto auto auto;
+  gap:0 20px;
+  align-items:center;
+  padding:14px 16px;
+  border-bottom:1px solid var(--border);
+  background:var(--surface);
+  opacity:0;
+  transform:translateX(24px);
+  animation:slideIn 0.4s ease forwards;
+  font-family:var(--font-mono);
+  transition:background 200ms ease;
+}
+.feed-card:last-child{border-bottom:none}
+.feed-card:hover{background:rgba(255,255,255,0.03)}
+@keyframes slideIn{to{opacity:1;transform:translateX(0)}}
+.feed-card-time{
+  font-size:10px;color:var(--muted);
+  white-space:nowrap;
+}
+.feed-card-market{
+  font-size:12px;color:var(--text);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  min-width:0;
+}
+.feed-card-side{
+  font-size:10px;font-weight:500;
+  padding:3px 8px;border-radius:3px;
+  white-space:nowrap;
+  flex-shrink:0;
+}
+.feed-card-side.yes{background:var(--mint-dim);color:var(--mint)}
+.feed-card-side.no{background:var(--amber-dim);color:var(--amber)}
+.feed-card-edge{
+  font-size:11px;color:var(--muted);
+  white-space:nowrap;
+}
+.feed-card-status{
+  font-size:10px;padding:3px 8px;
+  border-radius:3px;white-space:nowrap;
+  flex-shrink:0;
+}
+.feed-card-status.pending{
+  background:rgba(255,255,255,0.04);
+  border:1px solid var(--border);
+  color:var(--muted);
+}
+.feed-card-status.win{background:var(--mint-dim);color:var(--mint)}
+.feed-card-status.loss{background:rgba(224,90,90,0.1);color:#e05a5a}
+
+/* Empty state */
+.feed-empty{
+  display:flex;flex-direction:column;align-items:center;
+  padding:56px 24px;gap:14px;
+  font-family:var(--font-mono);
+  background:var(--surface);
+}
+.feed-empty-icon{
+  font-size:24px;opacity:0.3;
+  animation:pulse-dot 3s ease-in-out infinite;
+}
+.feed-empty-text{font-size:12px;color:var(--muted)}
+
 /* ─── FOOTER ─────────────────────────────────────────────────────────────── */
 #footer{
   background:var(--surface);
@@ -426,6 +518,18 @@ section{padding:100px 0}
   .metrics-grid{grid-template-columns:repeat(2,1fr)}
   .arch-grid{grid-template-columns:1fr}
   .checklist-grid{grid-template-columns:1fr}
+}
+@media(max-width:700px){
+  .feed-card{
+    grid-template-columns:1fr auto;
+    grid-template-rows:auto auto;
+    gap:6px 12px;
+  }
+  .feed-card-time{grid-column:1;grid-row:2;font-size:10px}
+  .feed-card-market{grid-column:1;grid-row:1}
+  .feed-card-side{grid-column:2;grid-row:1}
+  .feed-card-edge{display:none}
+  .feed-card-status{grid-column:2;grid-row:2}
 }
 @media(max-width:600px){
   .countdown{gap:16px}
@@ -505,6 +609,24 @@ section{padding:100px 0}
         <div class="metric-label">Kelly Fraction</div>
         <div class="metric-trend">fractional sizing</div>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── LIVE FEED ────────────────────────────────────────────────────────── -->
+<section id="livefeed">
+  <div class="wrap">
+    <p class="section-label reveal">Terminal</p>
+    <h2 class="section-title reveal">Live feed</h2>
+    <div class="feed-header reveal">
+      <div class="feed-meta">
+        <span class="feed-dot"></span>
+        <span class="feed-status">apex-agent running · PM2 id=7 · paper mode</span>
+      </div>
+      <div class="feed-ts" id="feed-ts"></div>
+    </div>
+    <div class="feed-list" id="feed-list">
+      <!-- Populated by JS from hardcoded trade data below -->
     </div>
   </div>
 </section>
@@ -823,6 +945,82 @@ section{padding:100px 0}
 
 /* ── FOOTER YEAR ─────────────────────────────────────────────────────────── */
 document.getElementById('year').textContent = new Date().getFullYear();
+
+/* ── LIVE FEED ───────────────────────────────────────────────────────────── */
+(function(){
+  // Hardcoded from /opt/apex/trades.log (last synced 2026-03-18)
+  const TRADES = [
+    {
+      date: "2026-03-18T01:01:35+00:00",
+      ticker: "KXNBAGAME-26MAR17PHXMIN-PHX",
+      title: "Phoenix at Minnesota Winner?",
+      side: "yes",
+      bet_usd: 2.56,
+      price_cents: 46,
+      edge: 0.08,
+      confidence: 0.68,
+      paper: true,
+      status: "pending"
+    },
+    {
+      date: "2026-03-18T01:02:50+00:00",
+      ticker: "KXNBAGAME-26MAR17CLEMIL-MIL",
+      title: "Cleveland at Milwaukee Winner?",
+      side: "yes",
+      bet_usd: 6.63,
+      price_cents: 24,
+      edge: 0.56,
+      confidence: 0.85,
+      paper: true,
+      status: "pending"
+    }
+  ];
+
+  const list = document.getElementById('feed-list');
+  const tsEl = document.getElementById('feed-ts');
+  if (!list) return;
+
+  // Timestamp
+  tsEl.textContent = 'last synced ' + new Date('2026-03-18T01:02:50+00:00')
+    .toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZoneName:'short'});
+
+  function fmtDate(iso) {
+    const d = new Date(iso);
+    return d.toLocaleTimeString('en-US', {hour:'2-digit',minute:'2-digit',timeZone:'UTC'}) + ' UTC';
+  }
+
+  function truncate(s, n) {
+    return s.length > n ? s.slice(0, n) + '…' : s;
+  }
+
+  if (!TRADES || TRADES.length === 0) {
+    list.innerHTML = '<div class="feed-empty"><div class="feed-empty-icon">◈</div>' +
+      '<div class="feed-empty-text">No trades yet — agent is scanning</div></div>';
+    return;
+  }
+
+  // Render newest first
+  const sorted = [...TRADES].reverse();
+  sorted.forEach(function(t, i) {
+    const card = document.createElement('div');
+    card.className = 'feed-card';
+    card.style.animationDelay = (i * 80) + 'ms';
+
+    const edgePct = (t.edge * 100).toFixed(1);
+    const statusClass = t.status === 'win' ? 'win' : t.status === 'loss' ? 'loss' : 'pending';
+    const statusLabel = t.status === 'win' ? 'WIN' : t.status === 'loss' ? 'LOSS' : 'PENDING';
+    const tag = t.paper ? '[P]' : '[L]';
+
+    card.innerHTML =
+      '<div class="feed-card-time">' + fmtDate(t.date) + '</div>' +
+      '<div class="feed-card-market">' + tag + ' ' + truncate(t.title, 55) + '</div>' +
+      '<div class="feed-card-side ' + t.side + '">' + t.side.toUpperCase() + ' $' + t.bet_usd.toFixed(2) + '</div>' +
+      '<div class="feed-card-edge">edge ' + edgePct + '%</div>' +
+      '<div class="feed-card-status ' + statusClass + '">' + statusLabel + '</div>';
+
+    list.appendChild(card);
+  });
+})();
 </script>
 </body>
 </html>
