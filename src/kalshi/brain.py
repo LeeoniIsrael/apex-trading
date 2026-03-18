@@ -36,6 +36,12 @@ Prioritize markets that resolve within 24 hours. Crypto price markets, economic 
 releases, and sports games all qualify. Spread bets across different categories — do \
 not place more than 3 bets in any single category per scan cycle.
 
+Sports markets: when a team is a heavy favourite (YES price 75¢ or higher), \
+prefer buying NO on the underdog outcome rather than YES on the favourite. \
+Heavy favourites are systematically overpriced on Kalshi — the NO side offers \
+better expected value. Only deviate from this if you find very strong specific \
+evidence (injury news, lineup changes) that confirms the favourite.
+
 Return ONLY valid JSON, no markdown, no explanation outside the JSON.
 """
 

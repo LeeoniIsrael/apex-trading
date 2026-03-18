@@ -20,10 +20,12 @@ load_dotenv(Path(__file__).parent / ".env")
 
 import brain
 import kelly as kelly_module
+import longshot_fade
 import market_intel
 import negrisk_scanner
 import sheets_logger
 import telegram_notify as tg
+import weather_strategy
 from kalshi_client import KalshiClient
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -42,7 +44,7 @@ logger = logging.getLogger("apex_agent")
 # ── Config ────────────────────────────────────────────────────────────────────
 TRADES_LOG = Path(__file__).parent / "trades.log"
 DAILY_CALLS_LOG = Path(__file__).parent / "daily_calls.json"
-DAILY_CLAUDE_BUDGET = 50
+DAILY_CLAUDE_BUDGET = 30
 PAPER_MODE = os.getenv("APEX_ENV", "paper").lower() == "paper"
 BANKROLL = float(os.getenv("APEX_BANKROLL", "150.0"))
 KELLY_FRACTION = float(os.getenv("KELLY_FRACTION", "0.35"))
@@ -375,6 +377,26 @@ if __name__ == "__main__":
         max_instances=1,
     )
 
+    # Weather strategy every 6 hours (aligned with GFS model updates: 00Z/06Z/12Z/18Z)
+    scheduler.add_job(
+        weather_strategy.run_weather_scan,
+        trigger=CronTrigger(hour="0,6,12,18", minute=5, timezone="UTC"),
+        id="weather_scan",
+        name="GFS ensemble weather strategy",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # Longshot fade every 30 minutes
+    scheduler.add_job(
+        longshot_fade.run_longshot_scan,
+        trigger=IntervalTrigger(minutes=30),
+        id="longshot_fade",
+        name="Longshot fade (structural bias)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     # Daily summary at 9am ET
     scheduler.add_job(
         daily_summary,
@@ -384,11 +406,17 @@ if __name__ == "__main__":
         replace_existing=True,
     )
 
-    logger.info("Scheduler started. Scan every 15min. Intel every 30min. NegRisk every 5min. Daily summary at 09:00 ET.")
+    logger.info(
+        "Scheduler started. "
+        "Brain scan 15min | Intel 30min | NegRisk 5min | "
+        "Weather 6h | Longshot 30min | Daily 09:00 ET"
+    )
 
     # Run initial intel + market scan on startup
     market_intel.run_market_intel()
     negrisk_scanner.run_negrisk_scan()
+    weather_strategy.run_weather_scan()
+    longshot_fade.run_longshot_scan()
     scan_markets()
 
     try:

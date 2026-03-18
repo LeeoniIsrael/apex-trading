@@ -225,15 +225,18 @@ class KalshiClient:
         amount_cents: dollar amount * 100
         price_cents:  price per contract (0–99 cents)
         """
-        order = {
+        order: dict = {
             "ticker": ticker,
             "side": side.lower(),
             "action": "buy",
             "type": "limit",
             "count": amount_cents // 100,  # contracts = dollars (each contract costs $1 max)
-            "yes_price": price_cents if side.lower() == "yes" else 100 - price_cents,
-            "no_price": price_cents if side.lower() == "no" else 100 - price_cents,
         }
+        # Kalshi requires exactly one price field
+        if side.lower() == "yes":
+            order["yes_price"] = price_cents
+        else:
+            order["no_price"] = price_cents
 
         if self.paper_mode:
             logger.info(
@@ -246,6 +249,48 @@ class KalshiClient:
                     "ticker": ticker,
                     "side": side,
                     "status": "resting",
+                    "created_time": datetime.now(timezone.utc).isoformat(),
+                    **order,
+                }
+            }
+
+        return self._post("/portfolio/orders", order)
+
+    def place_limit_order(
+        self,
+        ticker: str,
+        side: str,        # "yes" or "no"
+        price_cents: int, # maker limit price (0–99)
+        contracts: int,   # number of contracts
+    ) -> dict:
+        """
+        Place a maker limit order by contract count (not dollar amount).
+        Used by weather_strategy and longshot_fade for tighter spread control.
+        """
+        order: dict = {
+            "ticker": ticker,
+            "side":   side.lower(),
+            "action": "buy",
+            "type":   "limit",
+            "count":  contracts,
+        }
+        # Kalshi requires exactly one price field
+        if side.lower() == "yes":
+            order["yes_price"] = price_cents
+        else:
+            order["no_price"] = price_cents
+
+        if self.paper_mode:
+            logger.info(
+                "[PAPER] place_limit_order | ticker=%s side=%s price=%s¢ contracts=%s",
+                ticker, side, price_cents, contracts,
+            )
+            return {
+                "order": {
+                    "order_id":    f"PAPER-LIMIT-{int(time.time())}",
+                    "ticker":      ticker,
+                    "side":        side,
+                    "status":      "resting",
                     "created_time": datetime.now(timezone.utc).isoformat(),
                     **order,
                 }
