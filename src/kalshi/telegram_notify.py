@@ -266,33 +266,85 @@ async def _cmd_resume(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
 
 
 @_guarded
+def get_trades_summary() -> str:
+    """
+    Read trades.log, deduplicate by ticker+side, compute correct payout math
+    in Python (not Claude), and return a formatted summary string.
+
+    Math: contracts = round(bet_usd / (price_cents / 100))
+          payout    = contracts * 1.00
+          profit    = payout - bet_usd
+    """
+    if not TRADES_LOG.exists() or not TRADES_LOG.read_text().strip():
+        return "No trades on record yet."
+
+    # Parse and deduplicate by ticker+side
+    seen: dict[str, dict] = {}
+    for line in TRADES_LOG.read_text().strip().splitlines():
+        try:
+            t   = json.loads(line)
+            key = f"{t.get('ticker', '')}|{t.get('side', '')}"
+            if key in seen:
+                seen[key]["bet_usd"] = round(
+                    seen[key]["bet_usd"] + float(t.get("bet_usd") or t.get("cost_usd") or 0), 2
+                )
+            else:
+                seen[key] = {
+                    "ticker":      t.get("ticker", "?"),
+                    "title":       t.get("title", t.get("ticker", "?")),
+                    "side":        t.get("side", "?"),
+                    "bet_usd":     float(t.get("bet_usd") or t.get("cost_usd") or 0),
+                    "price_cents": int(t.get("price_cents", 50)),
+                    "paper":       t.get("paper", True),
+                }
+        except Exception:
+            pass
+
+    if not seen:
+        return "No trades on record yet."
+
+    rows = []
+    total_bet    = 0.0
+    total_payout = 0.0
+
+    for pos in seen.values():
+        bet         = pos["bet_usd"]
+        price       = pos["price_cents"]
+        side        = pos["side"].upper()
+        title       = pos["title"].replace(" Winner?", "").replace(" winner?", "")[:50]
+        tag         = "[P]" if pos["paper"] else "[L]"
+
+        contracts   = round(bet / (price / 100))
+        payout      = round(contracts * 1.00, 2)
+        profit      = round(payout - bet, 2)
+
+        total_bet    += bet
+        total_payout += payout
+
+        rows.append(
+            f"{tag} {title} — bet ${bet:.2f} on {side} at {price}¢, "
+            f"pays ${payout:.2f} if wins, profit +${profit:.2f}"
+        )
+
+    total_profit = round(total_payout - total_bet, 2)
+    rows.append(
+        f"\nTotal at risk: ${total_bet:.2f} | "
+        f"Total payout if all win: ${total_payout:.2f} | "
+        f"Total profit if all win: +${total_profit:.2f}"
+    )
+    return "\n".join(rows)
+
+
 async def _cmd_trades(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     try:
-        if not TRADES_LOG.exists() or not TRADES_LOG.read_text().strip():
-            await update.message.reply_text("No trades on record yet.")
-            return
-        lines = TRADES_LOG.read_text().strip().splitlines()[-10:]
-        if not lines:
-            await update.message.reply_text("No trades on record yet.")
-            return
-        rows = []
-        for line in lines:
-            try:
-                t    = json.loads(line)
-                date = t.get("date", "")[:10]
-                tkr  = t.get("ticker", "?")[:28]
-                side = t.get("side", "?").upper()
-                bet  = t.get("bet_usd", 0)
-                edge = float(t.get("edge", 0)) * 100
-                tag  = "[P]" if t.get("paper") else "[L]"
-                rows.append(f"{tag} `{date}` {tkr} {side} ${bet:.2f} edge={edge:+.1f}%")
-            except Exception:
-                pass
-        await update.message.reply_text(
-            "*Last 10 trades*\n" + "\n".join(rows), parse_mode="Markdown"
-        )
+        summary = get_trades_summary()
+        if len(summary) > 3800:
+            await update.message.reply_text(summary[:3800])
+            await update.message.reply_text(summary[3800:])
+        else:
+            await update.message.reply_text(summary)
     except Exception as e:
-        await update.message.reply_text(f"Couldn't read trades. `{e}`", parse_mode="Markdown")
+        await update.message.reply_text(f"Couldn't read trades. {e}")
 
 
 @_guarded
@@ -379,6 +431,21 @@ async def _handle_message(update: "Update", context: "ContextTypes.DEFAULT_TYPE"
 
     if _BLOCKED_RE.search(text):
         await update.message.reply_text("Not sure what you mean. Try /help.")
+        return
+
+    # Route trade-listing questions directly to get_trades_summary() — no Claude needed
+    _TRADES_RE = re.compile(
+        r"\b(what.{0,20}(bet|trade|position|placed)|show.{0,15}(trade|bet|position)|"
+        r"list.{0,15}(trade|bet|position)|our (bet|trade|position)s?)\b",
+        re.IGNORECASE,
+    )
+    if _TRADES_RE.search(text):
+        summary = get_trades_summary()
+        if len(summary) > 3800:
+            await update.message.reply_text(summary[:3800])
+            await update.message.reply_text(summary[3800:])
+        else:
+            await update.message.reply_text(summary)
         return
 
     try:
