@@ -1,0 +1,297 @@
+"""
+APEX — Autonomous Prediction EXchange agent.
+Scans Kalshi prediction markets every 15 minutes and places Kelly-sized bets.
+"""
+import asyncio
+import json
+import logging
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
+from dotenv import load_dotenv
+
+# Load env from same directory as this file
+load_dotenv(Path(__file__).parent / ".env")
+
+import brain
+import kelly as kelly_module
+import telegram_notify as tg
+from kalshi_client import KalshiClient
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(Path(__file__).parent / "apex.log"),
+    ],
+)
+logger = logging.getLogger("apex_agent")
+
+# ── Config ────────────────────────────────────────────────────────────────────
+TRADES_LOG = Path(__file__).parent / "trades.log"
+PAPER_MODE = os.getenv("APEX_ENV", "paper").lower() == "paper"
+BANKROLL = float(os.getenv("APEX_BANKROLL", "150.0"))
+KELLY_FRACTION = float(os.getenv("KELLY_FRACTION", "0.25"))
+MAX_POSITION_PCT = float(os.getenv("MAX_POSITION_PCT", "0.05"))
+MAX_POSITIONS = 10
+MIN_VOLUME = 1000
+MIN_HOURS_TO_CLOSE = 1
+MAX_DAYS_TO_CLOSE = 7
+
+
+def _get_client() -> KalshiClient:
+    return KalshiClient(
+        key_id=os.getenv("KALSHI_API_KEY_ID", ""),
+        private_key_path=os.getenv("KALSHI_PRIVATE_KEY_PATH", "/opt/apex/kalshi_private.pem"),
+        paper_mode=PAPER_MODE,
+    )
+
+
+def _log_trade(entry: dict) -> None:
+    with open(TRADES_LOG, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
+def _read_trades_today() -> list[dict]:
+    if not TRADES_LOG.exists():
+        return []
+    today = datetime.now(timezone.utc).date().isoformat()
+    trades = []
+    for line in TRADES_LOG.read_text().splitlines():
+        try:
+            t = json.loads(line)
+            if t.get("date", "").startswith(today):
+                trades.append(t)
+        except Exception:
+            pass
+    return trades
+
+
+def _hours_until_close(close_time_str: str) -> float:
+    """Return hours until market closes. Returns 0 on parse failure."""
+    try:
+        from datetime import datetime
+        close = datetime.fromisoformat(close_time_str.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        return (close - now).total_seconds() / 3600
+    except Exception:
+        return 0.0
+
+
+# ── Schedule 1: Market scan every 15 minutes ─────────────────────────────────
+def scan_markets() -> None:
+    logger.info("── Market scan starting ──")
+    try:
+        client = _get_client()
+    except ValueError as e:
+        logger.warning("Kalshi client not ready: %s", e)
+        return
+    except Exception as e:
+        logger.error("Failed to init Kalshi client: %s", e)
+        asyncio.run(tg.send_error(f"Kalshi client init failed: {e}"))
+        return
+
+    # Check position count
+    try:
+        positions = client.get_positions()
+        open_positions = [p for p in positions if p.get("total_traded", 0) > 0]
+        if len(open_positions) >= MAX_POSITIONS:
+            logger.info("Max positions (%d) reached, skipping scan.", MAX_POSITIONS)
+            return
+        positions_used = len(open_positions)
+    except Exception as e:
+        logger.warning("Could not fetch positions: %s", e)
+        positions_used = 0
+
+    # Fetch markets
+    try:
+        markets = client.get_markets(limit=20)
+    except Exception as e:
+        logger.error("Failed to fetch markets: %s", e)
+        asyncio.run(tg.send_error(f"Market fetch failed: {e}"))
+        return
+
+    logger.info("Fetched %d markets", len(markets))
+
+    for market in markets:
+        if positions_used >= MAX_POSITIONS:
+            break
+
+        ticker = market.get("ticker", "")
+        volume = market.get("volume", 0)
+        close_time = market.get("close_time", "")
+
+        # Filter: minimum volume
+        if volume < MIN_VOLUME:
+            logger.debug("Skipping %s — volume %d < %d", ticker, volume, MIN_VOLUME)
+            continue
+
+        # Filter: time window
+        hours_left = _hours_until_close(close_time)
+        if hours_left < MIN_HOURS_TO_CLOSE:
+            logger.debug("Skipping %s — closes in %.1fh (too soon)", ticker, hours_left)
+            continue
+        if hours_left > MAX_DAYS_TO_CLOSE * 24:
+            logger.debug("Skipping %s — closes in %.1fd (too far)", ticker, hours_left / 24)
+            continue
+
+        # Brain analysis
+        try:
+            decision = brain.analyze_market(market)
+        except Exception as e:
+            logger.error("brain.analyze_market error for %s: %s", ticker, e)
+            continue
+
+        action = decision.get("action", "SKIP")
+        if action == "SKIP":
+            continue
+
+        # Kelly sizing
+        our_prob = float(decision.get("our_probability", 0.5))
+        yes_price = market.get("yes_ask", 50)
+        market_prob = yes_price / 100.0
+        if action == "BUY_NO":
+            market_prob = 1.0 - market_prob
+
+        bet_usd = kelly_module.kelly_bet(
+            bankroll=BANKROLL,
+            our_probability=our_prob,
+            market_probability=market_prob,
+            kelly_fraction=KELLY_FRACTION,
+            max_pct=MAX_POSITION_PCT,
+        )
+
+        if bet_usd <= 0:
+            logger.info("Kelly returned 0 for %s, skipping.", ticker)
+            continue
+
+        side = "yes" if action == "BUY_YES" else "no"
+        price_cents = yes_price if side == "yes" else (100 - yes_price)
+        edge_pct = abs(decision.get("edge", 0)) * 100
+
+        # Place order (or paper log)
+        try:
+            order_result = client.place_order(
+                ticker=ticker,
+                side=side,
+                amount_cents=int(bet_usd * 100),
+                price_cents=price_cents,
+            )
+            positions_used += 1
+        except Exception as e:
+            logger.error("place_order failed for %s: %s", ticker, e)
+            asyncio.run(tg.send_error(f"Order failed {ticker}: {e}"))
+            continue
+
+        # Log trade
+        trade_entry = {
+            "date": datetime.now(timezone.utc).isoformat(),
+            "ticker": ticker,
+            "title": market.get("title", ""),
+            "action": action,
+            "side": side,
+            "bet_usd": bet_usd,
+            "price_cents": price_cents,
+            "edge": decision.get("edge"),
+            "our_probability": our_prob,
+            "market_probability": market_prob,
+            "confidence": decision.get("confidence"),
+            "reasoning": decision.get("reasoning", ""),
+            "paper": PAPER_MODE,
+            "order_id": order_result.get("order", {}).get("order_id", ""),
+        }
+        _log_trade(trade_entry)
+
+        asyncio.run(tg.send_trade_alert(
+            market_title=market.get("title", ticker),
+            side=side.upper(),
+            amount_usd=bet_usd,
+            edge_pct=edge_pct,
+            reasoning=decision.get("reasoning", ""),
+        ))
+        logger.info("Trade placed: %s %s $%.2f edge=%.1f%%", ticker, side, bet_usd, edge_pct)
+
+    logger.info("── Market scan complete ──")
+
+
+# ── Schedule 2: Daily summary at 9am ET ──────────────────────────────────────
+def daily_summary() -> None:
+    logger.info("── Daily summary ──")
+    trades = _read_trades_today()
+    if not trades:
+        logger.info("No trades today.")
+        return
+
+    # Rough P&L estimate (would need settlement data for real P&L)
+    total_bet = sum(t.get("bet_usd", 0) for t in trades)
+    wins = sum(1 for t in trades if float(t.get("edge", 0)) > 0)
+    win_rate = wins / len(trades) if trades else 0
+
+    asyncio.run(tg.send_daily_summary(
+        pnl=0.0,      # Real P&L requires checking settled positions
+        trades=len(trades),
+        win_rate=win_rate,
+        bankroll=BANKROLL,
+    ))
+
+
+# ── Startup ───────────────────────────────────────────────────────────────────
+def startup() -> None:
+    logger.info("APEX agent starting | mode=%s bankroll=$%.2f", "PAPER" if PAPER_MODE else "LIVE", BANKROLL)
+
+    # Try to get real balance
+    balance = BANKROLL
+    try:
+        client = _get_client()
+        bal_data = client.get_balance()
+        balance = bal_data.get("balance", BANKROLL) / 100  # Kalshi returns cents
+    except Exception as e:
+        logger.warning("Could not fetch Kalshi balance: %s", e)
+
+    asyncio.run(tg.send_startup(
+        balance=balance,
+        mode="PAPER" if PAPER_MODE else "LIVE",
+    ))
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    startup()
+
+    scheduler = BlockingScheduler(timezone="America/New_York")
+
+    # Scan every 15 minutes
+    scheduler.add_job(
+        scan_markets,
+        trigger=IntervalTrigger(minutes=15),
+        id="market_scan",
+        name="Kalshi market scan",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # Daily summary at 9am ET
+    scheduler.add_job(
+        daily_summary,
+        trigger=CronTrigger(hour=9, minute=0, timezone="America/New_York"),
+        id="daily_summary",
+        name="Daily P&L summary",
+        replace_existing=True,
+    )
+
+    logger.info("Scheduler started. Scan every 15min. Daily summary at 09:00 ET.")
+
+    # Run an immediate scan on startup
+    scan_markets()
+
+    try:
+        scheduler.start()
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("APEX agent stopped.")

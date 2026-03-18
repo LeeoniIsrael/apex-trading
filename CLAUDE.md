@@ -1,12 +1,12 @@
-# APEX — Autonomous Predictive Equity eXperiment
+# APEX — Autonomous Prediction EXchange
 
-**Mission**: Build a 30-day autonomous algorithmic trading system, document it as a research paper, and publish the journey as a public devlog. Started March 3, 2026.
+**Mission**: Build an autonomous AI agent that trades Kalshi prediction markets using Claude-powered analysis, Kelly Criterion position sizing, and RSA-authenticated API access. Running on Hetzner server at 178.156.159.178. Started March 3, 2026.
 
 ## The Three Pillars
 
 | Pillar | What it is | Primary output |
 |---|---|---|
-| **Trading Agent** | Autonomous Claude-powered equity trading system | Live P&L, trade logs, DuckDB |
+| **Trading Agent** | Autonomous Claude-powered Kalshi prediction market trader | Live P&L, trades.log, DuckDB |
 | **Research Paper** | Academic-grade writeup of strategy, methodology, results | `docs/paper/` (Quarto → PDF) |
 | **Documentation Engine** | Daily auto-generated journal + public devlog | `docs/journal/` + published posts |
 
@@ -17,15 +17,16 @@
 | Layer | Tool | Notes |
 |---|---|---|
 | Language | Python 3.12+ | |
-| Package manager | `uv` | Use `uv add`, `uv run`, never raw `pip` |
-| Broker | Alpaca Markets | Paper until day 22; live (with hard cap) days 22–28 |
-| Backtesting | `vectorbt` | All backtests live in `src/backtest/` |
-| Database | DuckDB | Single file `data/apex.duckdb`; no CSV for market data |
-| ML signals | LightGBM + scikit-learn | Features in `src/strategy/features.py` |
-| Agent loop | Claude API (`claude-haiku-4-5`) + APScheduler | Cheap + fast for autonomous ticks |
-| Dashboard | Streamlit | `src/dashboard/app.py` |
+| Package manager | `pip` + `venv` on server; `uv` locally | Server: `/opt/apex/venv/` |
+| Market | Kalshi prediction markets | RSA API auth, paper + live modes |
+| ML / analysis | Claude Haiku + web_search | `claude-haiku-4-5-20251001` per tick |
+| Position sizing | Kelly Criterion | Fractional (0.25×), capped 5% per position |
+| Agent loop | APScheduler | Scans every 15min; daily summary 9am ET |
+| Infra | Hetzner VPS (178.156.159.178) | PM2 id=7, `/opt/apex/` |
+| Notifications | Telegram bot | Startup, trades, daily P&L, errors |
+| Database | DuckDB | Single file `data/apex.duckdb` |
 | Paper + journal | Quarto (`.qmd`) | `docs/paper/` and `docs/journal/` |
-| Config | Pydantic Settings | All secrets via `.env`, never hardcoded |
+| Config | `.env` file | All secrets via env vars, never hardcoded |
 | Testing | pytest | `tests/` mirrors `src/` |
 
 ---
@@ -35,28 +36,25 @@
 ```
 apex-trading/
 ├── CLAUDE.md
-├── pyproject.toml          # uv-managed dependencies
+├── pyproject.toml          # uv-managed dependencies (local dev)
 ├── .env                    # secrets (gitignored)
 ├── src/
-│   ├── agent/              # Autonomous trading loop
-│   │   ├── loop.py         # APScheduler entry point
-│   │   ├── brain.py        # Claude API reasoning layer
-│   │   └── executor.py     # Alpaca order execution
-│   ├── strategy/           # Strategy definitions
-│   │   ├── momentum.py
-│   │   ├── mean_reversion.py
-│   │   └── features.py     # Feature engineering (LightGBM inputs)
-│   ├── data/               # Data ingestion
-│   │   ├── market.py       # Alpaca market data → DuckDB
-│   │   └── schema.py       # DuckDB schema definitions
-│   ├── backtest/           # vectorbt backtest scripts
-│   └── dashboard/          # Streamlit monitoring app
-│       └── app.py
+│   ├── kalshi/             # Kalshi prediction market agent (deployed to /opt/apex/)
+│   │   ├── apex_agent.py   # Main agent — APScheduler entry point
+│   │   ├── brain.py        # Claude Haiku reasoning + web_search
+│   │   ├── kalshi_client.py# Kalshi REST API v2 with RSA auth
+│   │   ├── kelly.py        # Kelly Criterion position sizer
+│   │   └── telegram_notify.py # Telegram alerts
+│   ├── strategy/           # Legacy equity strategy code (archived)
+│   ├── data/               # Data ingestion utilities
+│   └── backtest/           # vectorbt backtest scripts
 ├── docs/
 │   ├── paper/              # Quarto research paper
 │   │   └── index.qmd
-│   └── journal/            # Daily auto-generated trading journals
-│       └── YYYY-MM-DD.qmd
+│   ├── journal/            # Daily auto-generated trading journals
+│   │   └── YYYY-MM-DD.qmd
+│   └── dashboard/          # Public-facing project dashboard (Netlify)
+│       └── index.html
 ├── data/
 │   └── apex.duckdb         # All market + trade data (gitignored if large)
 ├── tests/
@@ -95,13 +93,16 @@ Each session should follow this order:
 
 ## Agent Behavior Rules
 
-- The trading agent (`src/agent/`) runs on a schedule via APScheduler during market hours
-- Every trade decision MUST be logged with Claude's reasoning to DuckDB
-- The agent uses `claude-haiku-4-5` for tick-level decisions (cost efficiency)
-- The agent uses `claude-sonnet-4-6` only for end-of-day analysis
-- Position sizing follows Kelly Criterion (fractional, capped at 5% per position)
-- The agent never exceeds 10 open positions simultaneously
-- **Stop-loss is mandatory**: every position gets a 2% trailing stop
+- The agent (`src/kalshi/apex_agent.py`) runs on Hetzner at `/opt/apex/` via PM2 (id=7)
+- Scans top 20 Kalshi markets by volume every 15 minutes
+- Filters: volume ≥ 1000 contracts, 1 hour to 7 days until close
+- Claude Haiku uses `web_search` to find recent news before deciding
+- Only trades if edge > 5% AND confidence > 60%
+- Position sizing: fractional Kelly (0.25×), hard cap 5% per position
+- Max 10 open positions simultaneously
+- Every trade logged to `/opt/apex/trades.log` + Telegram alert
+- Daily P&L summary sent to Telegram at 9am ET
+- **Paper mode by default** (`APEX_ENV=paper`); live requires manual env change + user confirmation
 
 ---
 
@@ -159,24 +160,38 @@ These are non-negotiable. Every step completion = dashboard update + deploy + co
 
 ## Hard Rules (Never Break)
 
-1. **No secrets in code** — all API keys in `.env` via Pydantic Settings
+1. **No secrets in code** — all API keys in `.env`, never hardcoded
 2. **No live trades without user confirmation** — agent can *recommend* but cannot *execute* live without approval
-3. **No strategy goes live without a backtest** — Sharpe > 0.5 required
+3. **Never touch `/opt/agency/`** — existing production processes there are off-limits
 4. **No CSV for market data** — DuckDB only
-5. **No `pip install`** — use `uv add`
-6. **No skipping tests** — `pytest` must pass before any commit
-7. **No modifying `src/agent/executor.py` without running `/verify` first** — this touches real/paper orders
+5. **No skipping tests** — `pytest` must pass before any commit
+6. **No modifying `src/kalshi/kalshi_client.py` without running `/verify` first** — this touches real/paper orders
 
 ---
 
-## Environment Variables (`.env`)
+## Server Setup (Hetzner)
+
+- **IP**: `178.156.159.178` | SSH key: `~/.ssh/hetzner_apex`
+- **Agent dir**: `/opt/apex/`
+- **PM2 process**: `apex-agent` (id=7)
+- **Protected**: `/opt/agency/` — **DO NOT TOUCH**
+- **Logs**: `pm2 logs apex-agent` or `/opt/apex/apex.log`
+- **RSA key**: paste manually into `/opt/apex/kalshi_private.pem` (chmod 600)
+
+---
+
+## Environment Variables (`/opt/apex/.env` on server)
 
 ```
-ALPACA_API_KEY=
-ALPACA_SECRET_KEY=
-ALPACA_BASE_URL=https://paper-api.alpaca.markets   # switch to https://api.alpaca.markets on April 15
-ANTHROPIC_API_KEY=
-APEX_LIVE_CAP_USD=150                              # hard cap for live phase (April 15–30)
+ANTHROPIC_API_KEY=<from /opt/agency/.env>
+KALSHI_API_KEY_ID=0034df3c-deb3-4b5d-be5c-7b478dec0c1b
+KALSHI_PRIVATE_KEY_PATH=/opt/apex/kalshi_private.pem
+TELEGRAM_BOT_TOKEN=8661730224:AAEJxtepO1OlVu8S4C7VH3L9iqiuGjcE5qw
+TELEGRAM_CHAT_ID=7926373806
+APEX_ENV=paper                  # change to 'live' only with explicit approval
+APEX_BANKROLL=150.00
+KELLY_FRACTION=0.25
+MAX_POSITION_PCT=0.05
 ```
 
 ---
