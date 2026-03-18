@@ -386,9 +386,22 @@ async def _handle_message(update: "Update", context: "ContextTypes.DEFAULT_TYPE"
 
         context_lines = ""
         if TRADES_LOG.exists():
-            context_lines = "\n".join(
-                TRADES_LOG.read_text().strip().splitlines()[-20:]
-            )
+            raw_lines = TRADES_LOG.read_text().strip().splitlines()[-40:]
+            # Deduplicate by ticker+side: combine repeated positions into one
+            seen: dict[str, dict] = {}
+            for line in raw_lines:
+                try:
+                    t = json.loads(line)
+                    key = f"{t.get('ticker','')}|{t.get('side','')}"
+                    if key in seen:
+                        seen[key]["cost_usd"] = round(
+                            seen[key].get("cost_usd", 0) + float(t.get("cost_usd", 0)), 2
+                        )
+                    else:
+                        seen[key] = dict(t)
+                except Exception:
+                    pass
+            context_lines = "\n".join(json.dumps(v) for v in seen.values())
         mode = os.getenv("APEX_ENV", "paper").upper()
 
         # Use AsyncAnthropic so 429 retries use asyncio.sleep (non-blocking)
@@ -428,7 +441,11 @@ async def _handle_message(update: "Update", context: "ContextTypes.DEFAULT_TYPE"
         logger.error("Q&A brain call failed: %s", e)
         reply = "Unavailable right now. Try again in a minute."
 
-    await update.message.reply_text(reply)
+    if len(reply) > 3800:
+        await update.message.reply_text(reply[:3800])
+        await update.message.reply_text(reply[3800:])
+    else:
+        await update.message.reply_text(reply)
 
 
 # ── Background listener ────────────────────────────────────────────────────────
