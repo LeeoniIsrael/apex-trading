@@ -43,9 +43,9 @@ BANKROLL = float(os.getenv("APEX_BANKROLL", "150.0"))
 KELLY_FRACTION = float(os.getenv("KELLY_FRACTION", "0.25"))
 MAX_POSITION_PCT = float(os.getenv("MAX_POSITION_PCT", "0.05"))
 MAX_POSITIONS = 10
-MIN_VOLUME = 1000
+MIN_VOLUME = 50
 MIN_HOURS_TO_CLOSE = 1
-MAX_DAYS_TO_CLOSE = 7
+MAX_DAYS_TO_CLOSE = 14
 
 
 def _get_client() -> KalshiClient:
@@ -127,22 +127,35 @@ def scan_markets() -> None:
             break
 
         ticker = market.get("ticker", "")
-        volume = market.get("volume", 0)
-        close_time = market.get("close_time", "")
+        try:
+            volume = float(market.get("volume_fp") or market.get("volume", 0) or 0)
+        except (ValueError, TypeError):
+            volume = 0.0
+        # Prefer expected_expiration_time (actual game/event end) over close_time (safety net)
+        close_time = (market.get("expected_expiration_time")
+                      or market.get("close_time", ""))
+        hours_left = _hours_until_close(close_time)
 
         # Filter: minimum volume
         if volume < MIN_VOLUME:
-            logger.debug("Skipping %s — volume %d < %d", ticker, volume, MIN_VOLUME)
+            logger.info("SKIP %s — volume %d < %d", ticker, volume, MIN_VOLUME)
             continue
 
         # Filter: time window
-        hours_left = _hours_until_close(close_time)
         if hours_left < MIN_HOURS_TO_CLOSE:
-            logger.debug("Skipping %s — closes in %.1fh (too soon)", ticker, hours_left)
+            logger.info("SKIP %s — closes in %.1fh (too soon, min=%.1fh) close_time=%s",
+                        ticker, hours_left, MIN_HOURS_TO_CLOSE, close_time)
             continue
         if hours_left > MAX_DAYS_TO_CLOSE * 24:
-            logger.debug("Skipping %s — closes in %.1fd (too far)", ticker, hours_left / 24)
+            logger.info("SKIP %s — closes in %.1fd (too far, max=%dd) close_time=%s",
+                        ticker, hours_left / 24, MAX_DAYS_TO_CLOSE, close_time)
             continue
+
+        logger.info("PASS %s — volume=%d hours_left=%.1f → sending to brain", ticker, volume, hours_left)
+
+        # Small delay to avoid Anthropic rate limits when scanning many markets
+        import time as _time
+        _time.sleep(2)
 
         # Brain analysis
         try:
@@ -157,7 +170,7 @@ def scan_markets() -> None:
 
         # Kelly sizing
         our_prob = float(decision.get("our_probability", 0.5))
-        yes_price = market.get("yes_ask", 50)
+        yes_price = KalshiClient.yes_price_cents(market)
         market_prob = yes_price / 100.0
         if action == "BUY_NO":
             market_prob = 1.0 - market_prob

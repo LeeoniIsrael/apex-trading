@@ -112,12 +112,84 @@ class KalshiClient:
 
     # ── Public API ───────────────────────────────────────────────────────────
 
+    # Short-term series with daily/weekly markets (discovered via probe 2026-03-18)
+    _SHORT_TERM_SERIES = [
+        "KXBTC", "KXETH", "KXNBAGAME", "KXNFLGAME",
+        "FEDHIKE", "CPI", "CPICORE", "INXD", "NFJOBS",
+    ]
+
     def get_markets(self, limit: int = 20, status: str = "open") -> list[dict]:
-        """Fetch top markets sorted by volume."""
-        data = self._get("/markets", params={"limit": limit, "status": status})
-        markets = data.get("markets", [])
-        # Sort by volume descending
-        return sorted(markets, key=lambda m: m.get("volume", 0), reverse=True)
+        """
+        Fetch top liquid markets from two sources:
+          1. /events endpoint — KX long-form prediction markets
+          2. Direct series fetch — short-term daily/weekly markets (crypto, sports, econ)
+
+        /markets (unfiltered) only returns KXMVE zero-volume parlays so we avoid it.
+        """
+        all_markets: list[dict] = []
+        seen_tickers: set[str] = set()
+
+        def _add(markets_list: list[dict], event_title: str = "", event_category: str = "") -> None:
+            for m in markets_list:
+                t = m.get("ticker", "")
+                if t and t not in seen_tickers:
+                    seen_tickers.add(t)
+                    if event_title:
+                        m["_event_title"] = event_title
+                    if event_category:
+                        m["_event_category"] = event_category
+                    all_markets.append(m)
+
+        # ── Source 1: /events → KX long-form universe ────────────────────────
+        try:
+            events_data = self._get("/events", params={"limit": 100, "status": status})
+            for event in events_data.get("events", [])[:30]:
+                try:
+                    detail = self._get(f"/events/{event['event_ticker']}")
+                    _add(detail.get("markets", []),
+                         event.get("title", ""), event.get("category", ""))
+                except Exception as e:
+                    logger.debug("Failed to fetch event %s: %s", event.get("event_ticker"), e)
+        except Exception as e:
+            logger.warning("Failed to fetch /events: %s", e)
+
+        # ── Source 2: known short-term series ─────────────────────────────────
+        for series in self._SHORT_TERM_SERIES:
+            try:
+                d = self._get("/markets", params={"limit": 50, "status": status,
+                                                  "series_ticker": series})
+                _add(d.get("markets", []))
+            except Exception as e:
+                logger.debug("Series %s fetch failed: %s", series, e)
+
+        def _vol(m: dict) -> float:
+            try:
+                return float(m.get("volume_fp") or 0)
+            except (ValueError, TypeError):
+                return 0.0
+
+        sorted_markets = sorted(all_markets, key=_vol, reverse=True)
+        logger.info(
+            "get_markets: %d total (events+series), top 5 volumes: %s",
+            len(all_markets),
+            [(m.get("ticker", "")[:35], m.get("volume_fp", "0")) for m in sorted_markets[:5]],
+        )
+        return sorted_markets[:limit]
+
+    @staticmethod
+    def yes_price_cents(market: dict) -> int:
+        """Extract YES ask price as integer cents (0–99) from market dict."""
+        # API returns prices as dollar strings: "0.4500" → 45 cents
+        for field in ("yes_ask_dollars", "yes_ask", "last_price_dollars"):
+            val = market.get(field)
+            if val is not None:
+                try:
+                    cents = round(float(val) * 100)
+                    if 1 <= cents <= 99:
+                        return cents
+                except (ValueError, TypeError):
+                    pass
+        return 50  # fallback: 50/50
 
     def get_market(self, ticker: str) -> dict:
         return self._get(f"/markets/{ticker}")

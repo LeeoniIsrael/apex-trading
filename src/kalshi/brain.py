@@ -66,21 +66,27 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
         dict with keys: action, our_probability, market_probability, edge,
                         confidence, reasoning
     """
+    from kalshi_client import KalshiClient
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-    yes_price = market.get("yes_ask", market.get("yes_bid", 50))
+    yes_price = KalshiClient.yes_price_cents(market)
     no_price = 100 - yes_price
 
+    # title: prefer event title injected by get_markets, fall back to market title
+    title = market.get("_event_title") or market.get("title", "Unknown")
+    category = market.get("_event_category") or market.get("category", "unknown")
+    volume = market.get("volume_fp") or market.get("volume", 0)
+
     prompt = MARKET_PROMPT.format(
-        title=market.get("title", "Unknown"),
+        title=title,
         ticker=market.get("ticker", ""),
         yes_price=yes_price,
         no_price=no_price,
         yes_prob=yes_price / 100,
         no_prob=no_price / 100,
-        volume=market.get("volume", 0),
+        volume=volume,
         close_time=market.get("close_time", "unknown"),
-        category=market.get("category", "unknown"),
+        category=category,
     )
 
     try:
@@ -99,10 +105,34 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
         )
 
         # Extract the text content from the response
+        # Claude may return tool_use blocks followed by a text block, or text only.
+        # Collect all text blocks; if none exist, the model returned only tool calls.
         result_text = ""
         for block in response.content:
             if hasattr(block, "text"):
                 result_text += block.text
+
+        if not result_text.strip():
+            # Claude returned only tool_use blocks (web search) with no final text.
+            # This happens when the model decides the search result IS the answer.
+            # Retry without web_search so it must synthesize a text response.
+            logger.warning(
+                "No text block from Claude for %s — retrying without web_search",
+                market.get("ticker"),
+            )
+            retry_response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=512,
+                system=SYSTEM_PROMPT,
+                messages=[{
+                    "role": "user",
+                    "content": prompt + "\n\nNote: no web search available. Use your training knowledge.",
+                }],
+            )
+            result_text = ""
+            for block in retry_response.content:
+                if hasattr(block, "text"):
+                    result_text += block.text
 
         if not result_text.strip():
             logger.warning("Empty response from Claude for market %s", market.get("ticker"))
