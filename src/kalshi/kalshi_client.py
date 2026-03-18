@@ -18,8 +18,8 @@ from cryptography.hazmat.primitives.asymmetric import padding
 
 logger = logging.getLogger(__name__)
 
-PROD_BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
-DEMO_BASE_URL = "https://demo-api.kalshi.co/trade-api/v2"
+PROD_BASE_URL = "https://trading.kalshi.com/trade-api/v2"
+DEMO_BASE_URL = "https://trading.kalshi.com/trade-api/v2"
 
 
 class KalshiClient:
