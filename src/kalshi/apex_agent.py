@@ -297,15 +297,21 @@ def daily_summary() -> None:
         bankroll=BANKROLL,
     ))
 
-    sheets_logger.log_daily_summary(
-        date=datetime.now(timezone.utc).date().isoformat(),
-        trades=len(trades),
-        wins=wins,
-        losses=len(trades) - wins,
-        pnl=0.0,
-        bankroll=BANKROLL,
-        win_rate=win_rate,
-    )
+    total_trades = len(trades)
+    losses = total_trades - wins
+    pnl = 0.0
+    bankroll = BANKROLL
+    day_number = (datetime.now(timezone.utc).date() - datetime(2026, 3, 3, tzinfo=timezone.utc).date()).days + 1
+    try:
+        from datetime import date
+        sheets_logger.log_daily_summary(
+            str(date.today()), day_number,
+            total_trades, wins, losses,
+            round(pnl, 2), round(bankroll, 2),
+            round(win_rate, 1)
+        )
+    except Exception as e:
+        logger.warning("Sheets logger error: %s", e)
 
 
 # ── Startup ───────────────────────────────────────────────────────────────────

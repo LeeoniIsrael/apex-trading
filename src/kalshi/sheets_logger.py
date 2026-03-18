@@ -17,6 +17,7 @@ def is_configured() -> bool:
 
 def log_daily_summary(
     date: str,
+    day_number: int,
     trades: int,
     wins: int,
     losses: int,
@@ -39,7 +40,7 @@ def log_daily_summary(
         client = gspread.authorize(creds)
         sheet = client.open_by_key(SHEET_ID).sheet1
         sheet.append_row([
-            date, trades, wins, losses,
+            date, day_number, trades, wins, losses,
             round(pnl, 2), round(bankroll, 2), round(win_rate, 1),
         ])
         logging.info("Sheets logger: row appended for %s", date)
