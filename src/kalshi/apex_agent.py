@@ -40,6 +40,8 @@ logger = logging.getLogger("apex_agent")
 
 # ── Config ────────────────────────────────────────────────────────────────────
 TRADES_LOG = Path(__file__).parent / "trades.log"
+DAILY_CALLS_LOG = Path(__file__).parent / "daily_calls.json"
+DAILY_CLAUDE_BUDGET = 50
 PAPER_MODE = os.getenv("APEX_ENV", "paper").lower() == "paper"
 BANKROLL = float(os.getenv("APEX_BANKROLL", "150.0"))
 KELLY_FRACTION = float(os.getenv("KELLY_FRACTION", "0.25"))
@@ -97,10 +99,34 @@ def _is_paused() -> bool:
     return _PAUSE_FLAG_SERVER.exists() or PAUSE_FLAG.exists()
 
 
+def _read_daily_budget() -> dict:
+    today = datetime.now(timezone.utc).date().isoformat()
+    try:
+        if DAILY_CALLS_LOG.exists():
+            data = json.loads(DAILY_CALLS_LOG.read_text())
+            if data.get("date") == today:
+                return data
+    except Exception:
+        pass
+    return {"date": today, "count": 0}
+
+
+def _increment_daily_budget(data: dict) -> None:
+    data["count"] = data.get("count", 0) + 1
+    try:
+        DAILY_CALLS_LOG.write_text(json.dumps(data))
+    except Exception as e:
+        logger.warning("Could not save daily_calls.json: %s", e)
+
+
 # ── Schedule 1: Market scan every 15 minutes ─────────────────────────────────
 def scan_markets() -> None:
     if _is_paused():
         logger.info("Trading paused — skipping scan.")
+        return
+    daily = _read_daily_budget()
+    if daily["count"] >= DAILY_CLAUDE_BUDGET:
+        logger.info("Daily Claude budget reached (%d/%d) — skipping scan.", daily["count"], DAILY_CLAUDE_BUDGET)
         return
     logger.info("── Market scan starting ──")
     try:
@@ -173,6 +199,7 @@ def scan_markets() -> None:
         # Brain analysis
         try:
             decision = brain.analyze_market(market)
+            _increment_daily_budget(daily)
         except Exception as e:
             logger.error("brain.analyze_market error for %s: %s", ticker, e)
             continue
