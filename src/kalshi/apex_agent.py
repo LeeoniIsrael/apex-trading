@@ -21,6 +21,7 @@ load_dotenv(Path(__file__).parent / ".env")
 import brain
 import kelly as kelly_module
 import market_intel
+import negrisk_scanner
 import sheets_logger
 import telegram_notify as tg
 from kalshi_client import KalshiClient
@@ -355,6 +356,16 @@ if __name__ == "__main__":
         max_instances=1,
     )
 
+    # NegRisk arb scanner every 5 minutes
+    scheduler.add_job(
+        negrisk_scanner.run_negrisk_scan,
+        trigger=IntervalTrigger(minutes=5),
+        id="negrisk_scan",
+        name="Polymarket NegRisk arb scanner",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     # Daily summary at 9am ET
     scheduler.add_job(
         daily_summary,
@@ -364,10 +375,11 @@ if __name__ == "__main__":
         replace_existing=True,
     )
 
-    logger.info("Scheduler started. Scan every 15min. Intel every 30min. Daily summary at 09:00 ET.")
+    logger.info("Scheduler started. Scan every 15min. Intel every 30min. NegRisk every 5min. Daily summary at 09:00 ET.")
 
     # Run initial intel + market scan on startup
     market_intel.run_market_intel()
+    negrisk_scanner.run_negrisk_scan()
     scan_markets()
 
     try:
