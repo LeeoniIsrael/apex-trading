@@ -32,6 +32,8 @@ logging.basicConfig(
         logging.FileHandler(Path(__file__).parent / "apex.log"),
     ],
 )
+# Enable DEBUG on kalshi_client so auth header details are visible
+logging.getLogger("kalshi_client").setLevel(logging.DEBUG)
 logger = logging.getLogger("apex_agent")
 
 # ── Config ────────────────────────────────────────────────────────────────────

@@ -3,14 +3,13 @@ Kalshi REST API v2 client with RSA authentication.
 Paper mode logs instead of executing orders.
 """
 import base64
-import hashlib
-import json
 import logging
 import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import requests
 from cryptography.hazmat.primitives import hashes, serialization
@@ -33,6 +32,8 @@ class KalshiClient:
         self.key_id = key_id
         self.paper_mode = paper_mode
         self.base_url = base_url or (DEMO_BASE_URL if paper_mode else PROD_BASE_URL)
+        # Extract the path prefix (e.g. "/trade-api/v2") for signing
+        self._base_path = urlparse(self.base_url).path.rstrip("/")
         self.session = requests.Session()
         self.session.headers.update({"Content-Type": "application/json"})
 
@@ -42,7 +43,6 @@ class KalshiClient:
             raise FileNotFoundError(f"Kalshi private key not found: {private_key_path}")
 
         key_content = key_path.read_bytes()
-        # Skip placeholder comments
         if b"RSA KEY WILL BE PASTED" in key_content:
             raise ValueError(
                 "kalshi_private.pem contains placeholder. Paste your RSA key first."
@@ -50,24 +50,51 @@ class KalshiClient:
 
         self.private_key = serialization.load_pem_private_key(key_content, password=None)
 
-    def _sign(self, timestamp_ms: str, method: str, path: str) -> str:
-        """Create RSA-SHA256 signature for Kalshi API auth."""
-        message = f"{timestamp_ms}{method}{path}".encode()
-        signature = self.private_key.sign(message, padding.PKCS1v15(), hashes.SHA256())
-        return base64.b64encode(signature).decode()
+    def _sign(self, timestamp_ms: str, method: str, full_path: str) -> str:
+        """
+        RSA-PSS-SHA256 signature per Kalshi spec.
+        Message = timestamp_ms (string) + HTTP_METHOD (uppercase) + full_path (no query string).
+        """
+        message = f"{timestamp_ms}{method}{full_path}".encode("utf-8")
+        signature = self.private_key.sign(
+            message,
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH,
+            ),
+            hashes.SHA256(),
+        )
+        return base64.b64encode(signature).decode("utf-8")
 
-    def _headers(self, method: str, path: str) -> dict:
+    def _headers(self, method: str, endpoint: str) -> dict:
+        """
+        Build Kalshi auth headers.
+        endpoint: path relative to base_url, e.g. '/portfolio/balance'
+        Signing uses the full path: self._base_path + endpoint
+        """
         ts = str(int(time.time() * 1000))
-        return {
-            "Kalshi-Access-Key": self.key_id,
-            "Kalshi-Access-Timestamp": ts,
-            "Kalshi-Access-Signature": self._sign(ts, method.upper(), path),
+        full_path = self._base_path + endpoint  # e.g. /trade-api/v2/portfolio/balance
+        sig = self._sign(ts, method.upper(), full_path)
+        headers = {
+            "KALSHI-ACCESS-KEY": self.key_id,
+            "KALSHI-ACCESS-TIMESTAMP": ts,
+            "KALSHI-ACCESS-SIGNATURE": sig,
         }
+        logger.debug(
+            "auth | method=%s full_path=%s ts=%s key_id=%s sig_prefix=%s",
+            method.upper(), full_path, ts, self.key_id, sig[:16],
+        )
+        return headers
 
     def _get(self, path: str, params: Optional[dict] = None) -> dict:
         headers = self._headers("GET", path)
         url = f"{self.base_url}{path}"
         resp = self.session.get(url, headers=headers, params=params, timeout=15)
+        if resp.status_code == 401:
+            logger.error(
+                "401 on GET %s — headers sent: %s — response: %s",
+                url, {k: v for k, v in headers.items()}, resp.text[:300],
+            )
         resp.raise_for_status()
         return resp.json()
 
@@ -75,6 +102,11 @@ class KalshiClient:
         headers = self._headers("POST", path)
         url = f"{self.base_url}{path}"
         resp = self.session.post(url, headers=headers, json=body, timeout=15)
+        if resp.status_code == 401:
+            logger.error(
+                "401 on POST %s — headers sent: %s — response: %s",
+                url, {k: v for k, v in headers.items()}, resp.text[:300],
+            )
         resp.raise_for_status()
         return resp.json()
 
