@@ -1,47 +1,117 @@
 """
-Telegram notification wrapper for APEX agent.
-All functions catch exceptions silently — a Telegram failure never crashes the agent.
+Little Lio Trader — two-way Telegram bot for APEX.
+
+Outbound: async send_* functions called via asyncio.run() from the agent loop.
+Inbound:  long-polling Application running in a background daemon thread.
+
+Security:
+  - Whitelist: only TELEGRAM_CHAT_ID may send commands (silent ignore otherwise)
+  - Rate limit: 5 messages per 60s per chat_id (silent ignore if exceeded)
+  - Hard block list: refuses requests touching keys/money/env/trade-history
+  - No personal data stored or logged
+  - Input sanitized before processing
+  - Long polling only (no webhook, no exposed endpoint)
 """
+import asyncio
+import collections
+import html
+import json
 import logging
 import os
+import re
+import sys
+import threading
+import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 try:
-    import telegram
-    from telegram import Bot
-    _TELEGRAM_AVAILABLE = True
+    from telegram import Bot, Update
+    from telegram.ext import (
+        Application,
+        ApplicationBuilder,
+        CommandHandler,
+        ContextTypes,
+        MessageHandler,
+        filters,
+    )
+    _TG = True
 except ImportError:
-    _TELEGRAM_AVAILABLE = False
-    logger.warning("python-telegram-bot not installed; Telegram notifications disabled.")
+    _TG = False
+    logger.warning("python-telegram-bot not installed; Telegram disabled.")
 
+# ── Paths & constants ──────────────────────────────────────────────────────────
+PAUSE_FLAG = Path("/opt/apex/paused.flag")
+TRADES_LOG  = Path("/opt/apex/trades.log")
+RATE_LIMIT_MAX    = 5
+RATE_LIMIT_WINDOW = 60  # seconds
 
-def _get_bot() -> Optional["Bot"]:
-    if not _TELEGRAM_AVAILABLE:
-        return None
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    if not token:
-        return None
-    return Bot(token=token)
+# ── Hard block list ────────────────────────────────────────────────────────────
+_BLOCKED_RE = re.compile(
+    r"api.?key|private.?key|secret|delete.*trade|drop.*log"
+    r"|rm\s+-rf|apex_env.*live|send.*money|transfer.*fund"
+    r"|withdraw|password|flip.*live|go.*live",
+    re.IGNORECASE,
+)
 
+# ── Rate limiter ───────────────────────────────────────────────────────────────
+_rate_buckets: dict[str, collections.deque] = {}
+
+def _is_rate_limited(chat_id: str) -> bool:
+    now = time.monotonic()
+    bucket = _rate_buckets.setdefault(chat_id, collections.deque())
+    while bucket and now - bucket[0] > RATE_LIMIT_WINDOW:
+        bucket.popleft()
+    if len(bucket) >= RATE_LIMIT_MAX:
+        return True
+    bucket.append(now)
+    return False
+
+# ── Auth & sanitisation ────────────────────────────────────────────────────────
+def _allowed_id() -> str:
+    return os.getenv("TELEGRAM_CHAT_ID", "")
+
+def _authorized(update: "Update") -> bool:
+    allowed = _allowed_id()
+    return bool(allowed) and str(update.effective_chat.id) == str(allowed)
+
+def _sanitize(text: str) -> str:
+    cleaned = html.unescape(text)
+    cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", cleaned)
+    return cleaned[:2000]
+
+# ── Token helpers ──────────────────────────────────────────────────────────────
+def _token() -> str:
+    return os.getenv("TELEGRAM_BOT_TOKEN", "")
 
 def _chat_id() -> str:
     return os.getenv("TELEGRAM_CHAT_ID", "")
 
-
-async def send_message(text: str) -> bool:
-    """Send a plain text message."""
+# ── Outbound API ───────────────────────────────────────────────────────────────
+async def _send(text: str) -> bool:
+    """Send a message to the configured chat. Never raises."""
     try:
-        bot = _get_bot()
-        if not bot or not _chat_id():
-            logger.info("[TELEGRAM stub] %s", text)
+        if not _TG or not _token() or not _chat_id():
+            logger.info("[TELEGRAM stub] %s", text[:120])
             return False
-        await bot.send_message(chat_id=_chat_id(), text=text, parse_mode="Markdown")
+        bot = Bot(token=_token())
+        async with bot:
+            await bot.send_message(
+                chat_id=_chat_id(),
+                text=text,
+                parse_mode="Markdown",
+            )
         return True
     except Exception as e:
-        logger.error("Telegram send_message failed: %s", e)
+        logger.error("Telegram _send failed: %s", e)
         return False
+
+
+async def send_message(text: str) -> bool:
+    return await _send(text)
 
 
 async def send_trade_alert(
@@ -51,49 +121,326 @@ async def send_trade_alert(
     edge_pct: float,
     reasoning: str,
 ) -> bool:
-    """Send a trade execution alert."""
     mode = os.getenv("APEX_ENV", "paper").upper()
-    text = (
-        f"*APEX TRADE — {mode}*\n"
+    return await _send(
+        f"*LITTLE LIO TRADER — {mode}*\n"
         f"Market: `{market_title}`\n"
         f"Side: `{side.upper()}`\n"
         f"Amount: `${amount_usd:.2f}`\n"
         f"Edge: `{edge_pct:.1f}%`\n"
         f"Reason: {reasoning}"
     )
-    return await send_message(text)
 
 
 async def send_daily_summary(
-    pnl: float,
-    trades: int,
-    win_rate: float,
-    bankroll: float,
+    pnl: float, trades: int, win_rate: float, bankroll: float
 ) -> bool:
-    """Send end-of-day P&L summary."""
-    pnl_emoji = "📈" if pnl >= 0 else "📉"
-    text = (
-        f"*APEX DAILY SUMMARY*\n"
-        f"{pnl_emoji} P&L: `${pnl:+.2f}`\n"
+    arrow = "📈" if pnl >= 0 else "📉"
+    return await _send(
+        f"*DAILY SUMMARY*\n"
+        f"{arrow} P&L: `${pnl:+.2f}`\n"
         f"Trades today: `{trades}`\n"
         f"Win rate: `{win_rate:.0%}`\n"
         f"Bankroll: `${bankroll:.2f}`"
     )
-    return await send_message(text)
 
 
 async def send_error(error_msg: str) -> bool:
-    """Send an error/alert message."""
-    text = f"*APEX ERROR*\n`{error_msg[:500]}`"
-    return await send_message(text)
+    return await _send(f"*APEX ERROR*\n`{error_msg[:500]}`")
 
 
 async def send_startup(balance: float, mode: str) -> bool:
-    """Send startup notification."""
-    text = (
-        f"*APEX AGENT STARTED*\n"
+    return await _send(
+        f"*LITTLE LIO TRADER ONLINE*\n"
         f"Mode: `{mode.upper()}`\n"
         f"Balance: `${balance:.2f}`\n"
-        f"Scanning markets every 15 minutes."
+        f"Scanning markets every 15 minutes. Let's get paid."
     )
-    return await send_message(text)
+
+
+# ── Shared Kalshi client factory for handlers ──────────────────────────────────
+def _make_kalshi_client():
+    sys.path.insert(0, "/opt/apex")
+    from kalshi_client import KalshiClient  # noqa: PLC0415
+    return KalshiClient(
+        key_id=os.getenv("KALSHI_API_KEY_ID", ""),
+        private_key_path=os.getenv(
+            "KALSHI_PRIVATE_KEY_PATH", "/opt/apex/kalshi_private.pem"
+        ),
+        paper_mode=os.getenv("APEX_ENV", "paper").lower() == "paper",
+    )
+
+
+# ── Guard decorator (auth + rate limit) ───────────────────────────────────────
+def _guarded(fn):
+    """Wrap a handler: silently drop if not authorized or rate-limited."""
+    import functools
+
+    @functools.wraps(fn)
+    async def wrapper(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+        if not _authorized(update):
+            return
+        if _is_rate_limited(str(update.effective_chat.id)):
+            return
+        await fn(update, context)
+
+    return wrapper
+
+
+# ── Command handlers ───────────────────────────────────────────────────────────
+@_guarded
+async def _cmd_start(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    await update.message.reply_text(
+        "Little Lio Trader online. Markets open. Let's get paid."
+    )
+
+
+@_guarded
+async def _cmd_status(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    try:
+        client = _make_kalshi_client()
+        bal_data  = client.get_balance()
+        balance   = bal_data.get("balance", 0) / 100
+        positions = client.get_positions()
+        open_pos  = [p for p in positions if p.get("total_traded", 0) > 0]
+        mode   = os.getenv("APEX_ENV", "paper").upper()
+        status = "⏸ PAUSED" if PAUSE_FLAG.exists() else "▶ RUNNING"
+        text = (
+            f"*STATUS*\n"
+            f"Mode: `{mode}` | {status}\n"
+            f"Balance: `${balance:.2f}`\n"
+            f"Open positions: `{len(open_pos)}`"
+        )
+    except Exception as e:
+        text = f"*STATUS*\nCouldn't fetch live data: `{e}`"
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+@_guarded
+async def _cmd_pause(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    PAUSE_FLAG.touch()
+    await update.message.reply_text("Trading paused. Sitting on hands.")
+
+
+@_guarded
+async def _cmd_resume(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    if PAUSE_FLAG.exists():
+        PAUSE_FLAG.unlink()
+    await update.message.reply_text("Back in action. Scanning markets.")
+
+
+@_guarded
+async def _cmd_trades(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    try:
+        if not TRADES_LOG.exists():
+            await update.message.reply_text("No trades yet.")
+            return
+        lines = TRADES_LOG.read_text().strip().splitlines()[-10:]
+        if not lines:
+            await update.message.reply_text("No trades yet.")
+            return
+        rows = []
+        for line in lines:
+            try:
+                t    = json.loads(line)
+                date = t.get("date", "")[:10]
+                tkr  = t.get("ticker", "?")[:28]
+                side = t.get("side", "?").upper()
+                bet  = t.get("bet_usd", 0)
+                edge = float(t.get("edge", 0)) * 100
+                tag  = "[P]" if t.get("paper") else "[L]"
+                rows.append(f"{tag} `{date}` {tkr} {side} ${bet:.2f} edge={edge:+.1f}%")
+            except Exception:
+                pass
+        await update.message.reply_text(
+            "*LAST 10 TRADES*\n" + "\n".join(rows), parse_mode="Markdown"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"Error reading trades: `{e}`", parse_mode="Markdown")
+
+
+@_guarded
+async def _cmd_briefing(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    try:
+        today  = datetime.now(timezone.utc).date().isoformat()
+        trades = []
+        if TRADES_LOG.exists():
+            for line in TRADES_LOG.read_text().splitlines():
+                try:
+                    t = json.loads(line)
+                    if t.get("date", "").startswith(today):
+                        trades.append(t)
+                except Exception:
+                    pass
+        if not trades:
+            await update.message.reply_text(
+                "No trades today. Market's a cold place sometimes."
+            )
+            return
+        total_bet = sum(t.get("bet_usd", 0) for t in trades)
+        wins      = sum(1 for t in trades if float(t.get("edge", 0)) > 0)
+        win_rate  = wins / len(trades)
+        quip = "Killing it today." if win_rate > 0.6 else "Working through it."
+        text = (
+            f"*TODAY'S BRIEFING*\n"
+            f"Trades: `{len(trades)}`\n"
+            f"Total deployed: `${total_bet:.2f}`\n"
+            f"Win rate (edge): `{win_rate:.0%}`\n"
+            f"Mode: `{os.getenv('APEX_ENV','paper').upper()}`\n"
+            f"{quip}"
+        )
+    except Exception as e:
+        text = f"Error generating briefing: `{e}`"
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+@_guarded
+async def _cmd_settings(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    text = (
+        f"*SETTINGS*\n"
+        f"APEX\\_ENV: `{os.getenv('APEX_ENV','paper')}`\n"
+        f"KELLY\\_FRACTION: `{os.getenv('KELLY_FRACTION','0.25')}`\n"
+        f"MAX\\_POSITION\\_PCT: `{os.getenv('MAX_POSITION_PCT','0.05')}`\n"
+        f"APEX\\_BANKROLL: `${float(os.getenv('APEX_BANKROLL','150')):.2f}`"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+@_guarded
+async def _cmd_risk(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    try:
+        client    = _make_kalshi_client()
+        positions = client.get_positions()
+        open_pos  = [p for p in positions if p.get("total_traded", 0) > 0]
+        bankroll  = float(os.getenv("APEX_BANKROLL", "150"))
+        exposure  = sum(float(p.get("total_traded", 0)) / 100 for p in open_pos)
+        remaining = bankroll - exposure
+        exp_pct   = (exposure / bankroll * 100) if bankroll else 0
+        text = (
+            f"*RISK DASHBOARD*\n"
+            f"Open positions: `{len(open_pos)}`\n"
+            f"Total exposure: `${exposure:.2f}`\n"
+            f"Remaining bankroll: `${remaining:.2f}`\n"
+            f"Exposure: `{exp_pct:.1f}%`"
+        )
+    except Exception as e:
+        text = f"Risk fetch failed: `{e}`"
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+@_guarded
+async def _cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    await update.message.reply_text(
+        "*LITTLE LIO TRADER*\n"
+        "/start — wake me up\n"
+        "/status — balance, positions, mode\n"
+        "/pause — stop placing new bets\n"
+        "/resume — back to scanning\n"
+        "/trades — last 10 trades\n"
+        "/briefing — today's P&L summary\n"
+        "/settings — current config\n"
+        "/risk — exposure breakdown\n"
+        "/help — this list\n\n"
+        "_Or just ask me anything._",
+        parse_mode="Markdown",
+    )
+
+
+@_guarded
+async def _handle_message(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """Smart Q&A: call Claude Haiku with trade context."""
+    raw  = update.message.text or ""
+    text = _sanitize(raw)
+
+    if _BLOCKED_RE.search(text):
+        await update.message.reply_text("Can't help with that. Not in my playbook.")
+        return
+
+    try:
+        import anthropic
+
+        context_lines = ""
+        if TRADES_LOG.exists():
+            context_lines = "\n".join(
+                TRADES_LOG.read_text().strip().splitlines()[-20:]
+            )
+        mode = os.getenv("APEX_ENV", "paper").upper()
+
+        ai = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        resp = ai.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=256,
+            system=(
+                "You are Little Lio Trader, a confident slightly cocky AI trading agent. "
+                "You manage a Kalshi prediction market portfolio. "
+                "You never reveal any personal information about the person you are talking to. "
+                "You speak like a winning trader — confident, sharp, occasionally cocky but never arrogant. "
+                "Keep replies under 3 sentences. No markdown formatting."
+            ),
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Current mode: {mode}\n"
+                    f"Recent trade log (last 20 lines):\n{context_lines}\n\n"
+                    f"Question: {text}"
+                ),
+            }],
+        )
+        reply = resp.content[0].text if resp.content else "Markets are quiet right now."
+    except Exception as e:
+        logger.error("Q&A brain call failed: %s", e)
+        reply = "Brain's busy. Check back in a minute."
+
+    await update.message.reply_text(reply)
+
+
+# ── Background listener ────────────────────────────────────────────────────────
+_bot_thread: Optional[threading.Thread] = None
+
+
+async def _run_polling(token: str) -> None:
+    app = ApplicationBuilder().token(token).build()
+    app.add_handler(CommandHandler("start",    _cmd_start))
+    app.add_handler(CommandHandler("status",   _cmd_status))
+    app.add_handler(CommandHandler("pause",    _cmd_pause))
+    app.add_handler(CommandHandler("resume",   _cmd_resume))
+    app.add_handler(CommandHandler("trades",   _cmd_trades))
+    app.add_handler(CommandHandler("briefing", _cmd_briefing))
+    app.add_handler(CommandHandler("settings", _cmd_settings))
+    app.add_handler(CommandHandler("risk",     _cmd_risk))
+    app.add_handler(CommandHandler("help",     _cmd_help))
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message)
+    )
+    async with app:
+        await app.start()
+        await app.updater.start_polling(drop_pending_updates=True)
+        logger.info("Telegram bot polling active.")
+        # Block until process dies (daemon thread — killed on main exit)
+        await asyncio.Event().wait()
+
+
+def start_bot_listener() -> None:
+    """Spawn the inbound handler in a background daemon thread."""
+    if not _TG:
+        logger.warning("python-telegram-bot unavailable; skipping bot listener.")
+        return
+    tok = _token()
+    if not tok:
+        logger.warning("No TELEGRAM_BOT_TOKEN; skipping bot listener.")
+        return
+
+    def _run() -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(_run_polling(tok))
+        except Exception as e:
+            logger.error("Bot listener crashed: %s", e)
+        finally:
+            loop.close()
+
+    global _bot_thread
+    _bot_thread = threading.Thread(target=_run, name="tg-listener", daemon=True)
+    _bot_thread.start()
+    logger.info("Telegram bot listener started (long polling, background thread).")

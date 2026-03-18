@@ -138,14 +138,28 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
             logger.warning("Empty response from Claude for market %s", market.get("ticker"))
             return _skip_result("Empty Claude response")
 
-        import json
-        # Strip any markdown code fences if present
+        import json, re as _re
+
+        # 1. Try to extract JSON object from anywhere in the text
         cleaned = result_text.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("```")[1]
-            if cleaned.startswith("json"):
-                cleaned = cleaned[4:]
-        cleaned = cleaned.strip()
+
+        # Strip markdown fences
+        if "```" in cleaned:
+            m = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, _re.DOTALL)
+            if m:
+                cleaned = m.group(1)
+
+        # If still not a bare JSON object, find the first {...} block
+        if not cleaned.startswith("{"):
+            m = _re.search(r"\{[^{}]*\"action\"[^{}]*\}", cleaned, _re.DOTALL)
+            if m:
+                cleaned = m.group(0)
+            else:
+                logger.warning(
+                    "No JSON object found in response for %s — text: %s",
+                    market.get("ticker"), cleaned[:200],
+                )
+                return _skip_result("No JSON in Claude response")
 
         result = json.loads(cleaned)
 

@@ -87,8 +87,19 @@ def _hours_until_close(close_time_str: str) -> float:
         return 0.0
 
 
+PAUSE_FLAG = Path(__file__).parent.parent.parent / "paused.flag"  # local dev
+_PAUSE_FLAG_SERVER = Path("/opt/apex/paused.flag")
+
+
+def _is_paused() -> bool:
+    return _PAUSE_FLAG_SERVER.exists() or PAUSE_FLAG.exists()
+
+
 # ── Schedule 1: Market scan every 15 minutes ─────────────────────────────────
 def scan_markets() -> None:
+    if _is_paused():
+        logger.info("Trading paused — skipping scan.")
+        return
     logger.info("── Market scan starting ──")
     try:
         client = _get_client()
@@ -278,6 +289,9 @@ def startup() -> None:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    # Start inbound Telegram command handler in background thread
+    tg.start_bot_listener()
+
     startup()
 
     scheduler = BlockingScheduler(timezone="America/New_York")
