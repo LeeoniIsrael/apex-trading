@@ -404,7 +404,12 @@ async def _handle_message(update: "Update", context: "ContextTypes.DEFAULT_TYPE"
                 "Numbers always in dollars. When listing bets, use simple numbered lines like: "
                 "1. OKC vs BKN — bet $6 on OKC, pays $6.50 if wins. "
                 "Always give a one-line verdict at the end. Never more than 6 sentences total. "
-                "Never mention user name or personal info."
+                "Never mention user name or personal info. "
+                "When listing open positions, always include for each one: the bet amount, what needs to happen to win, "
+                "the exact payout amount in dollars, and the profit (payout minus bet). "
+                "At the end show a total summary line: Total at risk: $X, Total payout if all win: $Y, Total profit if all win: +$Z. "
+                "Calculate payout as: contracts x $1.00. Calculate contracts as: bet_amount / price_per_contract. "
+                "For a NO bet at 87c, one contract costs $0.87 and pays $1.00."
             ),
             messages=[{
                 "role": "user",
