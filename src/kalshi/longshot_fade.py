@@ -44,8 +44,12 @@ KELLY_FRACTION  = 0.20          # Conservative — structural edge only
 MAX_BET_USD     = 10.0
 TRADES_LOG_PATH = Path(os.getenv("TRADES_LOG", "/opt/apex/trades.log"))
 
-# Longshot zone: YES price in [5, 20] cents
-LONGSHOT_LOW  = 5
+# Longshot zone: YES price in [10, 20] cents.
+# We skip the 5-9¢ range: at those extremes the market tends to be correct
+# (true long shots that almost never resolve YES). The structural bias is
+# strongest in the 10-20¢ band where retail bettors systematically overweight
+# small probabilities — these contracts win ~half as often as implied.
+LONGSHOT_LOW  = 10
 LONGSHOT_HIGH = 20
 
 # Implied true probability adjustment — bias research shows 15¢ YES contracts
