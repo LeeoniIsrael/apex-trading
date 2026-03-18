@@ -90,6 +90,20 @@ def _log_trade(entry: dict) -> None:
         logger.warning("trade log write failed: %s", e)
 
 
+def _get_resting_tickers(client: KalshiClient) -> set[str]:
+    """Return the set of tickers that already have a resting NO order."""
+    try:
+        data = client._get("/portfolio/orders", params={"status": "resting"})
+        return {
+            o.get("ticker", "")
+            for o in data.get("orders", [])
+            if o.get("side", "").lower() == "no"
+        }
+    except Exception as e:
+        logger.warning("Could not fetch resting orders: %s", e)
+        return set()
+
+
 def run_longshot_scan() -> list[dict]:
     """
     Entry point called by APScheduler every 30 minutes.
@@ -109,6 +123,9 @@ def run_longshot_scan() -> list[dict]:
         logger.warning("Longshot scan: Kalshi client init failed: %s", e)
         return []
 
+    # Fetch existing resting NO orders to avoid duplicates
+    resting_tickers = _get_resting_tickers(client)
+
     # Fetch a broad slice of open markets
     try:
         markets = client.get_markets(limit=50)
@@ -121,6 +138,9 @@ def run_longshot_scan() -> list[dict]:
     for market in markets:
         ticker = market.get("ticker", "")
         if ticker in _FADED_TODAY:
+            continue
+        if ticker in resting_tickers:
+            logger.info("SKIP %s — order already resting, no duplicate", ticker)
             continue
 
         yes_price = KalshiClient.yes_price_cents(market)
@@ -187,7 +207,10 @@ def run_longshot_scan() -> list[dict]:
             continue
 
         _FADED_TODAY.add(ticker)
-        cost_usd = round(contracts * limit_price / 100, 2)
+        cost_usd        = round(contracts * limit_price / 100, 2)
+        contracts_exact = cost_usd / (limit_price / 100)
+        payout          = round(contracts_exact * 1.00, 2)
+        profit          = round(payout - cost_usd, 2)
 
         entry = {
             "date":         datetime.now(timezone.utc).isoformat(),
@@ -209,10 +232,11 @@ def run_longshot_scan() -> list[dict]:
         orders.append(entry)
         _log_trade(entry)
 
+        clean_title = title.replace(" Winner?", "").replace(" winner?", "")
         msg = (
-            f"*LONGSHOT FADE:* {title[:60]} — "
-            f"YES at {yes_price}¢ (longshot), buying NO at {limit_price}¢, "
-            f"edge +{edge:.0%} structural bias — ${cost_usd:.2f} placed"
+            f"*LONGSHOT FADE:* {clean_title} — "
+            f"bet ${cost_usd:.2f} on NO at {limit_price}¢, "
+            f"payout ${payout:.2f} if wins, profit +${profit:.2f}"
         )
         logger.info(msg.replace("*", ""))
         asyncio.run(tg.send_message(msg))
