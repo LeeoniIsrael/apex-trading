@@ -408,8 +408,11 @@ async def _handle_message(update: "Update", context: "ContextTypes.DEFAULT_TYPE"
                 "When listing open positions, always include for each one: the bet amount, what needs to happen to win, "
                 "the exact payout amount in dollars, and the profit (payout minus bet). "
                 "At the end show a total summary line: Total at risk: $X, Total payout if all win: $Y, Total profit if all win: +$Z. "
-                "Calculate payout as: contracts x $1.00. Calculate contracts as: bet_amount / price_per_contract. "
-                "For a NO bet at 87c, one contract costs $0.87 and pays $1.00."
+                "CRITICAL MATH: For any NO bet, payout is NEVER equal to cost. "
+                "The formula is: if bet=$17.40 at price=87 cents, then contracts=17.40/0.87=20, payout=20x1.00=$20.00, profit=$20.00-$17.40=$2.60. "
+                "For a NO bet at price P cents: contracts=bet/(P/100), payout=contracts x 1.00, profit=payout-bet. "
+                "Always show payout GREATER than bet. "
+                "If your calculation shows payout equals bet, you made an error — recalculate."
             ),
             messages=[{
                 "role": "user",
