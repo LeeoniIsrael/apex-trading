@@ -45,7 +45,7 @@ DAILY_CALLS_LOG = Path(__file__).parent / "daily_calls.json"
 DAILY_CLAUDE_BUDGET = 50
 PAPER_MODE = os.getenv("APEX_ENV", "paper").lower() == "paper"
 BANKROLL = float(os.getenv("APEX_BANKROLL", "150.0"))
-KELLY_FRACTION = float(os.getenv("KELLY_FRACTION", "0.25"))
+KELLY_FRACTION = float(os.getenv("KELLY_FRACTION", "0.35"))
 MAX_POSITION_PCT = float(os.getenv("MAX_POSITION_PCT", "0.05"))
 MAX_POSITIONS = 10
 MIN_VOLUME = 100
@@ -227,6 +227,7 @@ def scan_markets() -> None:
         if bet_usd <= 0:
             logger.info("Kelly returned 0 for %s, skipping.", ticker)
             continue
+        bet_usd = max(bet_usd, 2.00)  # minimum bet floor
 
         side = "yes" if action == "BUY_YES" else "no"
         price_cents = yes_price if side == "yes" else (100 - yes_price)
