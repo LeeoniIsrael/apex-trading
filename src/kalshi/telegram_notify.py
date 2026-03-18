@@ -123,38 +123,33 @@ async def send_trade_alert(
 ) -> bool:
     mode = os.getenv("APEX_ENV", "paper").upper()
     return await _send(
-        f"*LITTLE LIO TRADER — {mode}*\n"
-        f"Market: `{market_title}`\n"
-        f"Side: `{side.upper()}`\n"
-        f"Amount: `${amount_usd:.2f}`\n"
-        f"Edge: `{edge_pct:.1f}%`\n"
-        f"Reason: {reasoning}"
+        f"*[{mode}] Trade placed*\n"
+        f"`{market_title}`\n"
+        f"{side.upper()} — `${amount_usd:.2f}` at `{edge_pct:.1f}%` edge\n"
+        f"{reasoning}"
     )
 
 
 async def send_daily_summary(
     pnl: float, trades: int, win_rate: float, bankroll: float
 ) -> bool:
-    arrow = "📈" if pnl >= 0 else "📉"
+    direction = "Up" if pnl >= 0 else "Down"
     return await _send(
-        f"*DAILY SUMMARY*\n"
-        f"{arrow} P&L: `${pnl:+.2f}`\n"
-        f"Trades today: `{trades}`\n"
-        f"Win rate: `{win_rate:.0%}`\n"
-        f"Bankroll: `${bankroll:.2f}`"
+        f"*Daily wrap*\n"
+        f"{direction} `${abs(pnl):.2f}` across `{trades}` trades. "
+        f"Win rate `{win_rate:.0%}`. Bankroll `${bankroll:.2f}`."
     )
 
 
 async def send_error(error_msg: str) -> bool:
-    return await _send(f"*APEX ERROR*\n`{error_msg[:500]}`")
+    return await _send(f"*Error*\n`{error_msg[:500]}`")
 
 
 async def send_startup(balance: float, mode: str) -> bool:
     return await _send(
-        f"*LITTLE LIO TRADER ONLINE*\n"
-        f"Mode: `{mode.upper()}`\n"
-        f"Balance: `${balance:.2f}`\n"
-        f"Scanning markets every 15 minutes. Let's get paid."
+        f"*Little Lio Trader*\n"
+        f"Online. `{mode.upper()}` mode. Balance `${balance:.2f}`. "
+        f"Scanning every 15 minutes."
     )
 
 
@@ -181,6 +176,7 @@ def _guarded(fn):
         if not _authorized(update):
             return
         if _is_rate_limited(str(update.effective_chat.id)):
+            await update.message.reply_text("Slow down.")
             return
         await fn(update, context)
 
@@ -191,53 +187,62 @@ def _guarded(fn):
 @_guarded
 async def _cmd_start(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     await update.message.reply_text(
-        "Little Lio Trader online. Markets open. Let's get paid."
+        "Online. Scanning markets every 15 minutes."
     )
 
 
 @_guarded
 async def _cmd_status(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     try:
-        client = _make_kalshi_client()
+        client    = _make_kalshi_client()
         bal_data  = client.get_balance()
         balance   = bal_data.get("balance", 0) / 100
         positions = client.get_positions()
         open_pos  = [p for p in positions if p.get("total_traded", 0) > 0]
-        mode   = os.getenv("APEX_ENV", "paper").upper()
-        status = "⏸ PAUSED" if PAUSE_FLAG.exists() else "▶ RUNNING"
+        bankroll  = float(os.getenv("APEX_BANKROLL", "150"))
+        mode      = os.getenv("APEX_ENV", "paper").upper()
+        paused    = PAUSE_FLAG.exists()
+        pnl       = balance - bankroll
+        n         = len(open_pos)
+
+        if paused:
+            state = "Paused"
+        elif pnl >= 0:
+            state = f"Up `${pnl:.2f}` so far. {n} position{'s' if n != 1 else ''} open. Looking clean."
+        else:
+            state = f"Down `${abs(pnl):.2f}`. {n} position{'s' if n != 1 else ''} open. Still within risk limits."
+
         text = (
-            f"*STATUS*\n"
-            f"Mode: `{mode}` | {status}\n"
-            f"Balance: `${balance:.2f}`\n"
-            f"Open positions: `{len(open_pos)}`"
+            f"`{mode}` — {state}\n"
+            f"Balance: `${balance:.2f}`"
         )
     except Exception as e:
-        text = f"*STATUS*\nCouldn't fetch live data: `{e}`"
+        text = f"Can't reach Kalshi right now. `{e}`"
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
 @_guarded
 async def _cmd_pause(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     PAUSE_FLAG.touch()
-    await update.message.reply_text("Trading paused. Sitting on hands.")
+    await update.message.reply_text("Paused. Not touching anything until you say so.")
 
 
 @_guarded
 async def _cmd_resume(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     if PAUSE_FLAG.exists():
         PAUSE_FLAG.unlink()
-    await update.message.reply_text("Back in action. Scanning markets.")
+    await update.message.reply_text("Back on it.")
 
 
 @_guarded
 async def _cmd_trades(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     try:
         if not TRADES_LOG.exists():
-            await update.message.reply_text("No trades yet.")
+            await update.message.reply_text("No trades on record yet.")
             return
         lines = TRADES_LOG.read_text().strip().splitlines()[-10:]
         if not lines:
-            await update.message.reply_text("No trades yet.")
+            await update.message.reply_text("No trades on record yet.")
             return
         rows = []
         for line in lines:
@@ -253,10 +258,10 @@ async def _cmd_trades(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
             except Exception:
                 pass
         await update.message.reply_text(
-            "*LAST 10 TRADES*\n" + "\n".join(rows), parse_mode="Markdown"
+            "*Last 10 trades*\n" + "\n".join(rows), parse_mode="Markdown"
         )
     except Exception as e:
-        await update.message.reply_text(f"Error reading trades: `{e}`", parse_mode="Markdown")
+        await update.message.reply_text(f"Couldn't read trades. `{e}`", parse_mode="Markdown")
 
 
 @_guarded
@@ -273,35 +278,31 @@ async def _cmd_briefing(update: "Update", context: "ContextTypes.DEFAULT_TYPE") 
                 except Exception:
                     pass
         if not trades:
-            await update.message.reply_text(
-                "No trades today. Market's a cold place sometimes."
-            )
+            await update.message.reply_text("Nothing placed today.")
             return
         total_bet = sum(t.get("bet_usd", 0) for t in trades)
         wins      = sum(1 for t in trades if float(t.get("edge", 0)) > 0)
         win_rate  = wins / len(trades)
-        quip = "Killing it today." if win_rate > 0.6 else "Working through it."
+        mode      = os.getenv("APEX_ENV", "paper").upper()
+        assessment = "Edge is there." if win_rate > 0.6 else "Mixed bag today."
         text = (
-            f"*TODAY'S BRIEFING*\n"
-            f"Trades: `{len(trades)}`\n"
-            f"Total deployed: `${total_bet:.2f}`\n"
-            f"Win rate (edge): `{win_rate:.0%}`\n"
-            f"Mode: `{os.getenv('APEX_ENV','paper').upper()}`\n"
-            f"{quip}"
+            f"*Today — `{mode}`*\n"
+            f"`{len(trades)}` trades, `${total_bet:.2f}` deployed, "
+            f"`{win_rate:.0%}` win rate. {assessment}"
         )
     except Exception as e:
-        text = f"Error generating briefing: `{e}`"
+        text = f"Couldn't generate briefing. `{e}`"
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
 @_guarded
 async def _cmd_settings(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     text = (
-        f"*SETTINGS*\n"
-        f"APEX\\_ENV: `{os.getenv('APEX_ENV','paper')}`\n"
-        f"KELLY\\_FRACTION: `{os.getenv('KELLY_FRACTION','0.25')}`\n"
-        f"MAX\\_POSITION\\_PCT: `{os.getenv('MAX_POSITION_PCT','0.05')}`\n"
-        f"APEX\\_BANKROLL: `${float(os.getenv('APEX_BANKROLL','150')):.2f}`"
+        f"*Config*\n"
+        f"env: `{os.getenv('APEX_ENV','paper')}`\n"
+        f"kelly: `{os.getenv('KELLY_FRACTION','0.25')}`\n"
+        f"max position: `{os.getenv('MAX_POSITION_PCT','0.05')}`\n"
+        f"bankroll: `${float(os.getenv('APEX_BANKROLL','150')):.2f}`"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
@@ -317,31 +318,27 @@ async def _cmd_risk(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> N
         remaining = bankroll - exposure
         exp_pct   = (exposure / bankroll * 100) if bankroll else 0
         text = (
-            f"*RISK DASHBOARD*\n"
-            f"Open positions: `{len(open_pos)}`\n"
-            f"Total exposure: `${exposure:.2f}`\n"
-            f"Remaining bankroll: `${remaining:.2f}`\n"
-            f"Exposure: `{exp_pct:.1f}%`"
+            f"*Risk*\n"
+            f"`{len(open_pos)}` open positions, `${exposure:.2f}` deployed "
+            f"(`{exp_pct:.1f}%` of bankroll). `${remaining:.2f}` remaining."
         )
     except Exception as e:
-        text = f"Risk fetch failed: `{e}`"
+        text = f"Couldn't fetch risk data. `{e}`"
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
 @_guarded
 async def _cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     await update.message.reply_text(
-        "*LITTLE LIO TRADER*\n"
-        "/start — wake me up\n"
-        "/status — balance, positions, mode\n"
-        "/pause — stop placing new bets\n"
-        "/resume — back to scanning\n"
+        "*Commands*\n"
+        "/status — balance, positions, P&L\n"
         "/trades — last 10 trades\n"
-        "/briefing — today's P&L summary\n"
-        "/settings — current config\n"
+        "/briefing — today's summary\n"
         "/risk — exposure breakdown\n"
-        "/help — this list\n\n"
-        "_Or just ask me anything._",
+        "/settings — current config\n"
+        "/pause — stop placing bets\n"
+        "/resume — start again\n\n"
+        "_Or just ask me something._",
         parse_mode="Markdown",
     )
 
@@ -353,7 +350,7 @@ async def _handle_message(update: "Update", context: "ContextTypes.DEFAULT_TYPE"
     text = _sanitize(raw)
 
     if _BLOCKED_RE.search(text):
-        await update.message.reply_text("Can't help with that. Not in my playbook.")
+        await update.message.reply_text("Not something I can help with.")
         return
 
     try:
@@ -371,11 +368,13 @@ async def _handle_message(update: "Update", context: "ContextTypes.DEFAULT_TYPE"
             model="claude-haiku-4-5-20251001",
             max_tokens=256,
             system=(
-                "You are Little Lio Trader, a confident slightly cocky AI trading agent. "
-                "You manage a Kalshi prediction market portfolio. "
-                "You never reveal any personal information about the person you are talking to. "
-                "You speak like a winning trader — confident, sharp, occasionally cocky but never arrogant. "
-                "Keep replies under 3 sentences. No markdown formatting."
+                "You are Little Lio Trader, an autonomous Kalshi prediction market agent. "
+                "You speak like a sharp, composed financial assistant — think Jarvis but younger. "
+                "Direct, no filler, occasionally uses natural modern dialect. "
+                "Never mention the user's name or identity. "
+                "Always under 3 sentences. "
+                "When things are good, you're measured about it. "
+                "When things are bad, you're honest about it."
             ),
             messages=[{
                 "role": "user",
@@ -386,10 +385,10 @@ async def _handle_message(update: "Update", context: "ContextTypes.DEFAULT_TYPE"
                 ),
             }],
         )
-        reply = resp.content[0].text if resp.content else "Markets are quiet right now."
+        reply = resp.content[0].text if resp.content else "Nothing to add right now."
     except Exception as e:
         logger.error("Q&A brain call failed: %s", e)
-        reply = "Brain's busy. Check back in a minute."
+        reply = "Unavailable right now. Try again in a minute."
 
     await update.message.reply_text(reply)
 
