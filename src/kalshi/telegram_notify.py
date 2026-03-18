@@ -265,7 +265,6 @@ async def _cmd_resume(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
     await update.message.reply_text("Back on it.")
 
 
-@_guarded
 def get_trades_summary() -> str:
     """
     Read trades.log, deduplicate by ticker+side, compute correct payout math
