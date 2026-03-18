@@ -20,6 +20,8 @@ load_dotenv(Path(__file__).parent / ".env")
 
 import brain
 import kelly as kelly_module
+import market_intel
+import sheets_logger
 import telegram_notify as tg
 from kalshi_client import KalshiClient
 
@@ -267,6 +269,16 @@ def daily_summary() -> None:
         bankroll=BANKROLL,
     ))
 
+    sheets_logger.log_daily_summary(
+        date=datetime.now(timezone.utc).date().isoformat(),
+        trades=len(trades),
+        wins=wins,
+        losses=len(trades) - wins,
+        pnl=0.0,
+        bankroll=BANKROLL,
+        win_rate=win_rate,
+    )
+
 
 # ── Startup ───────────────────────────────────────────────────────────────────
 def startup() -> None:
@@ -306,6 +318,16 @@ if __name__ == "__main__":
         max_instances=1,
     )
 
+    # Market intelligence every 30 minutes
+    scheduler.add_job(
+        market_intel.run_market_intel,
+        trigger=IntervalTrigger(minutes=30),
+        id="market_intel",
+        name="Market intelligence scan",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     # Daily summary at 9am ET
     scheduler.add_job(
         daily_summary,
@@ -315,9 +337,10 @@ if __name__ == "__main__":
         replace_existing=True,
     )
 
-    logger.info("Scheduler started. Scan every 15min. Daily summary at 09:00 ET.")
+    logger.info("Scheduler started. Scan every 15min. Intel every 30min. Daily summary at 09:00 ET.")
 
-    # Run an immediate scan on startup
+    # Run initial intel + market scan on startup
+    market_intel.run_market_intel()
     scan_markets()
 
     try:

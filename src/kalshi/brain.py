@@ -2,8 +2,11 @@
 Claude Haiku decision engine for APEX prediction market agent.
 Analyzes Kalshi markets and returns structured trade recommendations.
 """
+import json
 import logging
 import os
+import time
+from pathlib import Path
 from typing import Any
 
 import anthropic
@@ -11,6 +14,7 @@ import anthropic
 logger = logging.getLogger(__name__)
 
 MIN_EDGE = 0.05  # 5% minimum edge to recommend a trade
+MARKET_INTEL_PATH = Path(__file__).parent / "market_intel.json"
 
 SYSTEM_PROMPT = """You are APEX, an autonomous prediction market trading agent.
 Your job is to analyze Kalshi prediction market questions and determine if there is a
@@ -55,6 +59,18 @@ Only return BUY_YES or BUY_NO if |edge| > 0.05 AND confidence > 0.6.
 """
 
 
+def _load_market_intel() -> dict:
+    """Load market intelligence if fresh (< 60 min old)."""
+    try:
+        if not MARKET_INTEL_PATH.exists():
+            return {}
+        if time.time() - MARKET_INTEL_PATH.stat().st_mtime > 3600:
+            return {}
+        return json.loads(MARKET_INTEL_PATH.read_text())
+    except Exception:
+        return {}
+
+
 def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
     """
     Analyze a Kalshi market dict and return a trade recommendation.
@@ -88,6 +104,27 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
         close_time=market.get("close_time", "unknown"),
         category=category,
     )
+
+    # Enrich prompt with market intelligence if available
+    intel = _load_market_intel()
+    if intel:
+        headlines = intel.get("news_headlines", [])[:3]
+        whales = intel.get("polymarket_whale_moves", [])[:2]
+        intel_lines = []
+        if headlines:
+            intel_lines.append("Recent prediction market news:")
+            for h in headlines:
+                if h.get("title"):
+                    intel_lines.append(f"- {h['title']}")
+        if whales:
+            intel_lines.append("Polymarket whale moves (large recent trades):")
+            for w in whales:
+                intel_lines.append(
+                    f"- {w.get('outcome', '')} on {str(w.get('market', ''))[:50]}: "
+                    f"${w.get('size_usd', 0):.0f} at {float(w.get('price', 0)):.0%}"
+                )
+        if intel_lines:
+            prompt += "\n\nAdditional market context:\n" + "\n".join(intel_lines)
 
     try:
         response = client.messages.create(

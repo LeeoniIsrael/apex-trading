@@ -477,6 +477,26 @@ section{padding:100px 0}
 .feed-card-status.win{background:var(--mint-dim);color:var(--mint)}
 .feed-card-status.loss{background:rgba(224,90,90,0.1);color:#e05a5a}
 
+/* ── Market Intel section ──────────────────────────────────────── */
+.intel-section{margin-top:24px;border-top:1px solid var(--border);padding-top:20px}
+.intel-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.intel-label{font-family:'DM Mono',monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-dim)}
+.intel-ts{font-family:'DM Mono',monospace;font-size:10px;color:var(--text-dim);opacity:.6}
+.intel-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.intel-card{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:6px;
+  padding:12px 14px;
+  font-size:12px;
+  line-height:1.5;
+}
+.intel-card-label{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);margin-bottom:6px}
+.intel-card-title{color:var(--text);margin-bottom:4px;font-size:12px}
+.intel-card-meta{font-family:'DM Mono',monospace;font-size:11px;color:var(--text-dim)}
+.intel-card-vol{color:var(--mint);font-weight:500}
+@media(max-width:600px){.intel-grid{grid-template-columns:1fr}}
+
 /* Empty state */
 .feed-empty{
   display:flex;flex-direction:column;align-items:center;
@@ -628,6 +648,15 @@ section{padding:100px 0}
     <div class="feed-list" id="feed-list">
       <!-- Populated by JS from hardcoded trade data below -->
     </div>
+    <div class="intel-section reveal">
+      <div class="intel-header">
+        <span class="intel-label">Market Intelligence</span>
+        <span class="intel-ts" id="intel-ts"></span>
+      </div>
+      <div class="intel-grid" id="intel-grid">
+        <!-- Polymarket + headlines from JS below -->
+      </div>
+    </div>
   </div>
 </section>
 
@@ -650,6 +679,9 @@ section{padding:100px 0}
       <div class="check-item done reveal"><div class="check-icon">✓</div><div>Telegram two-way bot (Little Lio Trader)</div></div>
       <div class="check-item done reveal"><div class="check-icon">✓</div><div>APScheduler 15min scan cycle</div></div>
       <div class="check-item done reveal"><div class="check-icon">✓</div><div>Netlify dashboard live</div></div>
+      <div class="check-item done reveal"><div class="check-icon">✓</div><div>Market intelligence pipeline (Polymarket + RSS)</div></div>
+      <div class="check-item done reveal"><div class="check-icon">✓</div><div>OpenClaw AI agent instance deployed</div></div>
+      <div class="check-item done reveal"><div class="check-icon">✓</div><div>Google Sheets logger (pending credentials)</div></div>
       <div class="check-item pending reveal"><div class="check-icon">○</div><div>Market filters tuned</div></div>
       <div class="check-item pending reveal"><div class="check-icon">○</div><div>First paper trade confirmed profitable</div></div>
       <div class="check-item pending reveal"><div class="check-icon">○</div><div>P&amp;L tracking live</div></div>
@@ -945,6 +977,55 @@ section{padding:100px 0}
 
 /* ── FOOTER YEAR ─────────────────────────────────────────────────────────── */
 document.getElementById('year').textContent = new Date().getFullYear();
+
+/* ── MARKET INTEL ────────────────────────────────────────────────────────── */
+(function(){
+  // Hardcoded from /opt/apex/market_intel.json (last synced 2026-03-18T03:43:28Z)
+  const POLYMARKET = [
+    {market:"Will the Fed decrease rates 25bps after the March 2026 meeting?",price:0.005,vol_usd:12249145},
+    {market:"Netanyahu out by March 31?",price:0.033,vol_usd:6797499},
+    {market:"Will there be no change in Fed rates after the March 2026 meeting?",price:0.9945,vol_usd:4842178}
+  ];
+  const HEADLINES = [
+    {title:"Prediction market gold rush, legal drama, AI forecasters on the horizon?",source:"Forecasting Substack",link:"https://forecasting.substack.com/p/prediction-market-gold-rush-legal"},
+    {title:"Aggressively reorienting the forecasting community towards AI resilience",source:"Forecasting Substack",link:"https://forecasting.substack.com/p/aggressively-reorienting-the-forecasting"},
+    {title:"Feedback loops for forecasting funding, builders' programs, corporate forecasting",source:"Forecasting Substack",link:"https://forecasting.substack.com/p/feedback-loops-for-forecasting-funding"},
+    {title:"National security professionals again found not to be calibrated",source:"Forecasting Substack",link:"https://forecasting.substack.com/p/national-security-professionals-again"},
+    {title:"Market intelligence pipeline online — Polymarket + RSS feeds active",source:"APEX",link:"#"}
+  ];
+
+  const grid = document.getElementById('intel-grid');
+  const tsEl = document.getElementById('intel-ts');
+  if (!grid) return;
+
+  tsEl.textContent = 'synced ' + new Date('2026-03-18T03:43:28Z')
+    .toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZoneName:'short'});
+
+  // Polymarket cards
+  POLYMARKET.forEach(function(m) {
+    const pct = (m.price * 100).toFixed(1);
+    const volStr = m.vol_usd >= 1e6 ? '$' + (m.vol_usd/1e6).toFixed(1) + 'M' : '$' + Math.round(m.vol_usd/1000) + 'K';
+    const card = document.createElement('div');
+    card.className = 'intel-card';
+    card.innerHTML =
+      '<div class="intel-card-label">Polymarket · 24h vol <span class="intel-card-vol">' + volStr + '</span></div>' +
+      '<div class="intel-card-title">' + m.market + '</div>' +
+      '<div class="intel-card-meta">YES ' + pct + '%</div>';
+    grid.appendChild(card);
+  });
+
+  // Headline cards
+  HEADLINES.slice(0, 5).forEach(function(h) {
+    const card = document.createElement('div');
+    card.className = 'intel-card';
+    card.innerHTML =
+      '<div class="intel-card-label">News · ' + h.source + '</div>' +
+      '<div class="intel-card-title">' +
+        (h.link !== '#' ? '<a href="' + h.link + '" target="_blank" rel="noopener" style="color:var(--text);text-decoration:none">' + h.title + '</a>' : h.title) +
+      '</div>';
+    grid.appendChild(card);
+  });
+})();
 
 /* ── LIVE FEED ───────────────────────────────────────────────────────────── */
 (function(){

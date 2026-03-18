@@ -190,7 +190,15 @@ def _guarded(fn):
 
     @functools.wraps(fn)
     async def wrapper(update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+        incoming_id = str(update.effective_chat.id) if update.effective_chat else "unknown"
+        allowed_id = _allowed_id()
+        logger.info(
+            "Incoming update | handler=%s chat_id=%s allowed=%s text=%s",
+            fn.__name__, incoming_id, allowed_id,
+            (update.message.text or "")[:60] if update.message else "",
+        )
         if not _authorized(update):
+            logger.warning("Rejected message from chat_id=%s (allowed=%s)", incoming_id, allowed_id)
             return
         cid = str(update.effective_chat.id)
         if _is_rate_limited(cid):
@@ -383,8 +391,10 @@ async def _handle_message(update: "Update", context: "ContextTypes.DEFAULT_TYPE"
             )
         mode = os.getenv("APEX_ENV", "paper").upper()
 
-        ai = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-        resp = ai.messages.create(
+        # Use AsyncAnthropic so 429 retries use asyncio.sleep (non-blocking)
+        # instead of time.sleep which would freeze the entire event loop.
+        ai = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        resp = await ai.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=256,
             system=(
