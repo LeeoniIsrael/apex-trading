@@ -13,7 +13,7 @@ import anthropic
 
 logger = logging.getLogger(__name__)
 
-MIN_EDGE = 0.05  # 5% minimum edge to recommend a trade
+MIN_EDGE = 0.07  # 7% minimum edge (raised per favourite-longshot bias research)
 MARKET_INTEL_PATH = Path(__file__).parent / "market_intel.json"
 
 SYSTEM_PROMPT = """You are APEX, an autonomous prediction market trading agent.
@@ -24,8 +24,13 @@ Always:
 1. Search for recent news about the specific market question
 2. Estimate the TRUE probability based on evidence found
 3. Compare to the MARKET IMPLIED probability (from price)
-4. Only recommend a trade if edge > 5%
+4. Only recommend a trade if edge > 7%
 5. Be conservative — "SKIP" is always safe
+
+Important: Research shows Kalshi has a favourite-longshot bias. Avoid recommending \
+bets under 25 cents (longshots lose more than implied). Prefer high-confidence markets \
+priced between 55-85 cents where the edge is most reliable. Only recommend BUY when \
+your estimated probability exceeds market price by at least 7%.
 
 Return ONLY valid JSON, no markdown, no explanation outside the JSON.
 """
@@ -55,7 +60,7 @@ Return JSON with exactly these fields:
   "reasoning": "<1-2 sentence explanation>"
 }}
 
-Only return BUY_YES or BUY_NO if |edge| > 0.05 AND confidence > 0.6.
+Only return BUY_YES or BUY_NO if |edge| > 0.07 AND confidence > 0.6 AND market price is between 25-85 cents.
 """
 
 

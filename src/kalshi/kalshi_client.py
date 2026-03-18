@@ -140,18 +140,22 @@ class KalshiClient:
                         m["_event_category"] = event_category
                     all_markets.append(m)
 
-        # ── Source 1: /events → KX long-form universe ────────────────────────
-        try:
-            events_data = self._get("/events", params={"limit": 100, "status": status})
-            for event in events_data.get("events", [])[:30]:
-                try:
-                    detail = self._get(f"/events/{event['event_ticker']}")
-                    _add(detail.get("markets", []),
-                         event.get("title", ""), event.get("category", ""))
-                except Exception as e:
-                    logger.debug("Failed to fetch event %s: %s", event.get("event_ticker"), e)
-        except Exception as e:
-            logger.warning("Failed to fetch /events: %s", e)
+        # ── Source 1: /events → KX long-form universe, cycled by category ──────
+        _CATEGORIES = ["sports", "crypto", "economics", "politics"]
+        for category in _CATEGORIES:
+            try:
+                events_data = self._get("/events", params={
+                    "limit": 25, "status": status, "category": category,
+                })
+                for event in events_data.get("events", [])[:10]:
+                    try:
+                        detail = self._get(f"/events/{event['event_ticker']}")
+                        _add(detail.get("markets", []),
+                             event.get("title", ""), event.get("category", category))
+                    except Exception as e:
+                        logger.debug("Failed to fetch event %s: %s", event.get("event_ticker"), e)
+            except Exception as e:
+                logger.warning("Failed to fetch /events?category=%s: %s", category, e)
 
         # ── Source 2: known short-term series ─────────────────────────────────
         for series in self._SHORT_TERM_SERIES:
