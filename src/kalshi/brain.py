@@ -121,7 +121,7 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
             for w in whales:
                 intel_lines.append(
                     f"- {w.get('outcome', '')} on {str(w.get('market', ''))[:50]}: "
-                    f"${w.get('size_usd', 0):.0f} at {float(w.get('price', 0)):.0%}"
+                    f"${float(w.get('size_usd') or 0):.0f} at {float(w.get('price') or 0):.0%}"
                 )
         if intel_lines:
             prompt += "\n\nAdditional market context:\n" + "\n".join(intel_lines)
