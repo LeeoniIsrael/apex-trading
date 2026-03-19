@@ -104,6 +104,29 @@ def _get_resting_tickers(client: KalshiClient) -> set[str]:
         return set()
 
 
+def _recently_traded(ticker: str, side: str, hours: int = 12) -> bool:
+    """Return True if a trade for this ticker+side appears in trades.log within the last N hours."""
+    if not TRADES_LOG_PATH.exists():
+        return False
+    cutoff = datetime.now(timezone.utc).timestamp() - hours * 3600
+    try:
+        for line in TRADES_LOG_PATH.read_text().splitlines():
+            try:
+                t = json.loads(line)
+                if t.get("ticker") != ticker or t.get("side", "").lower() != side.lower():
+                    continue
+                trade_time = datetime.fromisoformat(
+                    t["date"].replace("Z", "+00:00")
+                ).timestamp()
+                if trade_time >= cutoff:
+                    return True
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return False
+
+
 def run_longshot_scan() -> list[dict]:
     """
     Entry point called by APScheduler every 30 minutes.
@@ -141,6 +164,9 @@ def run_longshot_scan() -> list[dict]:
             continue
         if ticker in resting_tickers:
             logger.info("SKIP %s — order already resting, no duplicate", ticker)
+            continue
+        if _recently_traded(ticker, "no"):
+            logger.info("SKIP %s — already traded this game today", ticker)
             continue
 
         yes_price = KalshiClient.yes_price_cents(market)
