@@ -147,6 +147,29 @@ def _get_city_markets(client: KalshiClient, suffix: str) -> list[dict]:
         return []
 
 
+def _recently_traded(ticker: str, side: str, hours: int = 24) -> bool:
+    """Return True if a trade for this ticker+side appears in trades.log within the last N hours."""
+    if not TRADES_LOG_PATH.exists():
+        return False
+    cutoff = datetime.now(timezone.utc).timestamp() - hours * 3600
+    try:
+        for line in TRADES_LOG_PATH.read_text().splitlines():
+            try:
+                t = json.loads(line)
+                if t.get("ticker") != ticker or t.get("side", "").lower() != side.lower():
+                    continue
+                trade_time = datetime.fromisoformat(
+                    t["date"].replace("Z", "+00:00")
+                ).timestamp()
+                if trade_time >= cutoff:
+                    return True
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return False
+
+
 def _log_trade(entry: dict) -> None:
     try:
         with open(TRADES_LOG_PATH, "a") as f:
@@ -213,7 +236,12 @@ def run_weather_scan() -> list[dict]:
             if abs(edge) < EDGE_THRESHOLD:
                 continue
 
-            side       = "yes" if edge > 0 else "no"
+            side = "yes" if edge > 0 else "no"
+
+            if _recently_traded(ticker, side):
+                logger.info("SKIP %s — already traded today (trades.log 24h lookback)", ticker)
+                continue
+
             our_p      = model_p        if side == "yes" else (1.0 - model_p)
             market_p   = kalshi_p       if side == "yes" else (1.0 - kalshi_p)
             limit_price = yes_price_cents if side == "yes" else (100 - yes_price_cents)

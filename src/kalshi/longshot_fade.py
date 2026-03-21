@@ -90,21 +90,7 @@ def _log_trade(entry: dict) -> None:
         logger.warning("trade log write failed: %s", e)
 
 
-def _get_resting_tickers(client: KalshiClient) -> set[str]:
-    """Return the set of tickers that already have a resting NO order."""
-    try:
-        data = client._get("/portfolio/orders", params={"status": "resting"})
-        return {
-            o.get("ticker", "")
-            for o in data.get("orders", [])
-            if o.get("side", "").lower() == "no"
-        }
-    except Exception as e:
-        logger.warning("Could not fetch resting orders: %s", e)
-        return set()
-
-
-def _recently_traded(ticker: str, side: str, hours: int = 12) -> bool:
+def _recently_traded(ticker: str, side: str, hours: int = 24) -> bool:
     """Return True if a trade for this ticker+side appears in trades.log within the last N hours."""
     if not TRADES_LOG_PATH.exists():
         return False
@@ -146,9 +132,6 @@ def run_longshot_scan() -> list[dict]:
         logger.warning("Longshot scan: Kalshi client init failed: %s", e)
         return []
 
-    # Fetch existing resting NO orders to avoid duplicates
-    resting_tickers = _get_resting_tickers(client)
-
     # Fetch a broad slice of open markets
     try:
         markets = client.get_markets(limit=50)
@@ -162,11 +145,8 @@ def run_longshot_scan() -> list[dict]:
         ticker = market.get("ticker", "")
         if ticker in _FADED_TODAY:
             continue
-        if ticker in resting_tickers:
-            logger.info("SKIP %s — order already resting, no duplicate", ticker)
-            continue
         if _recently_traded(ticker, "no"):
-            logger.info("SKIP %s — already traded this game today", ticker)
+            logger.info("SKIP %s — already traded today (trades.log 24h lookback)", ticker)
             continue
 
         yes_price = KalshiClient.yes_price_cents(market)
