@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 import brain
+import feedback_loop
 import kelly as kelly_module
 import longshot_fade
 import market_intel
@@ -445,6 +446,16 @@ if __name__ == "__main__":
         max_instances=1,
     )
 
+    # Feedback loop every hour — learn from settled positions
+    scheduler.add_job(
+        feedback_loop.run_feedback_loop,
+        trigger=IntervalTrigger(minutes=60),
+        id="feedback_loop",
+        name="Settled position feedback loop",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     # Morning briefing at 9am ET
     scheduler.add_job(
         morning_briefing,
@@ -457,10 +468,11 @@ if __name__ == "__main__":
     logger.info(
         "Scheduler started. "
         "Brain scan 15min | Intel 30min | NegRisk 5min | "
-        "Weather 6h | Longshot 30min | Daily 09:00 ET"
+        "Weather 6h | Longshot 30min | Feedback 60min | Daily 09:00 ET"
     )
 
-    # Run initial intel + market scan on startup
+    # Run initial scans on startup
+    feedback_loop.run_feedback_loop()
     market_intel.run_market_intel()
     negrisk_scanner.run_negrisk_scan()
     weather_strategy.run_weather_scan()

@@ -157,6 +157,16 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
     if not use_search:
         logger.info("SKIP web_search — %s [%s]", skip_reason, market.get("ticker"))
 
+    # Inject live calibration data into system prompt
+    try:
+        import feedback_loop as _fb
+        calibration = _fb.get_edge_calibration()
+    except Exception:
+        calibration = ""
+    system_prompt = SYSTEM_PROMPT
+    if calibration:
+        system_prompt = SYSTEM_PROMPT + "\n\n" + calibration
+
     # Enrich prompt with market intelligence if available
     intel = _load_market_intel()
     if intel:
@@ -193,7 +203,7 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=512,
-            system=SYSTEM_PROMPT,
+            system=system_prompt,
             **({"tools": tools} if tools else {}),
             messages=[{"role": "user", "content": prompt + no_search_note}],
         )
@@ -217,7 +227,7 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
             retry_response = client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=512,
-                system=SYSTEM_PROMPT,
+                system=system_prompt,
                 messages=[{
                     "role": "user",
                     "content": prompt + "\n\nNote: no web search available. Use your training knowledge.",
