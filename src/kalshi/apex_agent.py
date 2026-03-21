@@ -282,38 +282,86 @@ def scan_markets() -> None:
     logger.info("── Market scan complete ──")
 
 
-# ── Schedule 2: Daily summary at 9am ET ──────────────────────────────────────
-def daily_summary() -> None:
-    logger.info("── Daily summary ──")
-    trades = _read_trades_today()
-    if not trades:
-        logger.info("No trades today.")
-        return
+# ── Schedule 2: Morning briefing at 9am ET ───────────────────────────────────
+def _read_settled_last_24h() -> list[dict]:
+    """Return trades.log entries from the last 24h that have a result field."""
+    if not TRADES_LOG.exists():
+        return []
+    cutoff = datetime.now(timezone.utc).timestamp() - 24 * 3600
+    settled = []
+    for line in TRADES_LOG.read_text().splitlines():
+        try:
+            t = json.loads(line)
+            result = str(t.get("result", "")).lower()
+            if result not in ("win", "won", "loss", "lost"):
+                continue
+            trade_time = datetime.fromisoformat(
+                t["date"].replace("Z", "+00:00")
+            ).timestamp()
+            if trade_time >= cutoff:
+                settled.append(t)
+        except Exception:
+            pass
+    return settled
 
-    # Rough P&L estimate (would need settlement data for real P&L)
-    total_bet = sum(t.get("bet_usd", 0) for t in trades)
-    wins = sum(1 for t in trades if float(t.get("edge", 0)) > 0)
-    win_rate = wins / len(trades) if trades else 0
 
-    asyncio.run(tg.send_daily_summary(
-        pnl=0.0,      # Real P&L requires checking settled positions
-        trades=len(trades),
-        win_rate=win_rate,
-        bankroll=BANKROLL,
-    ))
+def _trade_pnl(t: dict) -> float:
+    """Best-effort P&L for a single settled trade."""
+    if "pnl" in t:
+        return float(t["pnl"])
+    result = str(t.get("result", "")).lower()
+    if result in ("win", "won"):
+        if "profit" in t:
+            return float(t["profit"])
+        payout = t.get("payout_usd") or t.get("cost_usd") or t.get("bet_usd") or 0
+        cost = t.get("cost_usd") or t.get("bet_usd") or 0
+        return float(payout) - float(cost)
+    # loss
+    return -(float(t.get("cost_usd") or t.get("bet_usd") or 0))
 
-    total_trades = len(trades)
-    losses = total_trades - wins
-    pnl = 0.0
-    bankroll = BANKROLL
+
+def morning_briefing() -> None:
+    logger.info("── Morning briefing ──")
+
+    # Fetch live balance
+    balance = BANKROLL
+    try:
+        client = _get_client()
+        bal_data = client.get_balance()
+        balance = bal_data.get("balance", BANKROLL * 100) / 100
+    except Exception as e:
+        logger.warning("Could not fetch balance for morning briefing: %s", e)
+
+    settled = _read_settled_last_24h()
+
+    if not settled:
+        msg = f"Good morning. No bets settled yesterday. Balance: ${balance:.2f}. Bot is running."
+    else:
+        wins = [t for t in settled if str(t.get("result", "")).lower() in ("win", "won")]
+        losses = [t for t in settled if str(t.get("result", "")).lower() in ("loss", "lost")]
+        net = sum(_trade_pnl(t) for t in settled)
+        sign = "+" if net >= 0 else ""
+        msg = (
+            f"Good morning. Yesterday: {len(wins)} wins, {len(losses)} losses, "
+            f"net {sign}${net:.2f}. Balance: ${balance:.2f}. Bot is running."
+        )
+
+    logger.info(msg)
+    asyncio.run(tg.send_message(msg))
+
+    # Sheets logger
+    wins_count = len([t for t in settled if str(t.get("result", "")).lower() in ("win", "won")])
+    losses_count = len(settled) - wins_count
+    net_pnl = sum(_trade_pnl(t) for t in settled) if settled else 0.0
+    win_rate = (wins_count / len(settled)) if settled else 0.0
     day_number = (datetime.now(timezone.utc).date() - datetime(2026, 3, 3, tzinfo=timezone.utc).date()).days + 1
     try:
         from datetime import date
         sheets_logger.log_daily_summary(
             str(date.today()), day_number,
-            total_trades, wins, losses,
-            round(pnl, 2), round(bankroll, 2),
-            round(win_rate, 1)
+            len(settled), wins_count, losses_count,
+            round(net_pnl, 2), round(balance, 2),
+            round(win_rate, 3),
         )
     except Exception as e:
         logger.warning("Sheets logger error: %s", e)
@@ -397,12 +445,12 @@ if __name__ == "__main__":
         max_instances=1,
     )
 
-    # Daily summary at 9am ET
+    # Morning briefing at 9am ET
     scheduler.add_job(
-        daily_summary,
+        morning_briefing,
         trigger=CronTrigger(hour=9, minute=0, timezone="America/New_York"),
-        id="daily_summary",
-        name="Daily P&L summary",
+        id="morning_briefing",
+        name="Daily morning briefing",
         replace_existing=True,
     )
 
