@@ -74,6 +74,39 @@ Only return BUY_YES or BUY_NO if |edge| > 0.07 AND confidence > 0.6 AND market p
 """
 
 
+_CRYPTO_KEYWORDS = (
+    "bitcoin", "btc", "ethereum", "eth", "crypto", "solana", "sol",
+    "doge", "xrp", "ripple",
+)
+_WEATHER_KEYWORDS = (
+    "temperature", "temp", "high", "low", "degrees", "fahrenheit", "°f",
+    "kxhigh", "kxtemp", "weather",
+)
+
+
+def _needs_web_search(title: str, category: str) -> tuple[bool, str]:
+    """
+    Return (True, '') if web_search is worth calling, or (False, reason) to skip.
+
+    Skip for:
+    - Crypto / Bitcoin price bracket markets — price is already in the market.
+    - Weather temperature bracket markets — GFS model data is the signal, not news.
+
+    Use web_search for sports, politics, economics, and everything else where
+    recent news genuinely shifts the probability.
+    """
+    title_lower = title.lower()
+    cat_lower = category.lower()
+
+    if any(k in title_lower or k in cat_lower for k in _CRYPTO_KEYWORDS):
+        return False, "crypto price market — news doesn't add signal"
+
+    if any(k in title_lower or k in cat_lower for k in _WEATHER_KEYWORDS):
+        return False, "weather temperature market — GFS model is the signal"
+
+    return True, ""
+
+
 def _load_market_intel() -> dict:
     """Load market intelligence if fresh (< 60 min old)."""
     try:
@@ -120,6 +153,10 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
         category=category,
     )
 
+    use_search, skip_reason = _needs_web_search(title, category)
+    if not use_search:
+        logger.info("SKIP web_search — %s [%s]", skip_reason, market.get("ticker"))
+
     # Enrich prompt with market intelligence if available
     intel = _load_market_intel()
     if intel:
@@ -141,19 +178,24 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
         if intel_lines:
             prompt += "\n\nAdditional market context:\n" + "\n".join(intel_lines)
 
+    tools = (
+        [{"type": "web_search_20250305", "name": "web_search", "max_uses": 2}]
+        if use_search
+        else []
+    )
+    no_search_note = (
+        "\n\nNote: no web search available. Use your training knowledge."
+        if not use_search
+        else ""
+    )
+
     try:
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=512,
             system=SYSTEM_PROMPT,
-            tools=[
-                {
-                    "type": "web_search_20250305",
-                    "name": "web_search",
-                    "max_uses": 2,
-                }
-            ],
-            messages=[{"role": "user", "content": prompt}],
+            **({"tools": tools} if tools else {}),
+            messages=[{"role": "user", "content": prompt + no_search_note}],
         )
 
         # Extract the text content from the response
