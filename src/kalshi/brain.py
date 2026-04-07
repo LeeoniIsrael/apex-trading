@@ -131,6 +131,19 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
                         confidence, reasoning
     """
     from kalshi_client import KalshiClient
+
+    # Skip crypto price bracket markets entirely — betting NO on multiple brackets
+    # creates structural loss risk where one YES wipes out multiple NO wins.
+    _title_raw = market.get("_event_title") or market.get("title", "")
+    _cat_raw = market.get("_event_category") or market.get("category", "")
+    _ticker_raw = market.get("ticker", "")
+    if any(
+        k in _title_raw.lower() or k in _cat_raw.lower() or k in _ticker_raw.lower()
+        for k in _CRYPTO_KEYWORDS
+    ):
+        logger.info("SKIP %s — crypto bracket, structural loss risk", _ticker_raw)
+        return _skip_result("crypto bracket, structural loss risk")
+
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
     yes_price = KalshiClient.yes_price_cents(market)

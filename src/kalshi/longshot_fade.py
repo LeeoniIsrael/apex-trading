@@ -61,6 +61,11 @@ MIN_VOLUME     = 50
 MIN_HOURS      = 1.0
 MAX_HOURS      = 24.0
 
+_CRYPTO_KEYWORDS = (
+    "bitcoin", "btc", "ethereum", "eth", "crypto", "solana", "sol",
+    "doge", "xrp", "ripple",
+)
+
 # Dedup: avoid re-fading the same ticker in the same run
 _FADED_TODAY: set[str] = set()
 _FADE_DATE: str = ""
@@ -145,6 +150,14 @@ def run_longshot_scan() -> list[dict]:
         ticker = market.get("ticker", "")
         if ticker in _FADED_TODAY:
             continue
+
+        title = market.get("_event_title") or market.get("title", ticker)
+        title_lower = title.lower()
+        ticker_lower = ticker.lower()
+        if any(k in title_lower or k in ticker_lower for k in _CRYPTO_KEYWORDS):
+            logger.info("SKIP %s — crypto bracket, structural loss risk", ticker)
+            continue
+
         if _recently_traded(ticker, "no"):
             logger.info("SKIP %s — already traded today (trades.log 24h lookback)", ticker)
             continue
@@ -165,8 +178,6 @@ def run_longshot_scan() -> list[dict]:
         hours_left = _hours_until_close(close_time)
         if not (MIN_HOURS <= hours_left <= MAX_HOURS):
             continue
-
-        title = market.get("_event_title") or market.get("title", ticker)
 
         # Edge calculation:
         # Market implies NO probability = 1 - yes_price/100
