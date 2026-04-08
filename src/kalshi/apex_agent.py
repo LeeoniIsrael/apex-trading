@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 import brain
+import btc_direction
 import feedback_loop
 import kelly as kelly_module
 import longshot_fade
@@ -456,6 +457,16 @@ if __name__ == "__main__":
         max_instances=1,
     )
 
+    # BTC direction strategy at 8am ET
+    scheduler.add_job(
+        btc_direction.run_btc_direction,
+        trigger=CronTrigger(hour=8, minute=0, timezone="America/New_York"),
+        id="btc_direction",
+        name="Bitcoin daily direction strategy",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     # Morning briefing at 9am ET
     scheduler.add_job(
         morning_briefing,
@@ -468,7 +479,8 @@ if __name__ == "__main__":
     logger.info(
         "Scheduler started. "
         "Brain scan 15min | Intel 30min | NegRisk 5min | "
-        "Weather 6h | Longshot 30min | Feedback 60min | Daily 09:00 ET"
+        "Weather 6h | Longshot 30min | Feedback 60min | "
+        "BTC direction 08:00 ET | Daily 09:00 ET"
     )
 
     # Run initial scans on startup
