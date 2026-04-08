@@ -232,71 +232,67 @@ async def _cmd_status(update: "Update", context: "ContextTypes.DEFAULT_TYPE") ->
     """
     Change 9: Full status report — balance, resting orders, positions,
     today's P&L vs yesterday, active strategies, last scan time.
+    Entire body wrapped in try/except so any failure surfaces to Telegram.
     """
     try:
-        client    = _make_kalshi_client()
-        bal_data  = client.get_balance()
-        balance   = bal_data.get("balance", 0) / 100
+        # ── Kalshi live data ───────────────────────────────────────────────────
+        client   = _make_kalshi_client()
+        bal_data = client.get_balance()
+        balance  = bal_data.get("balance", 0) / 100
         positions = client.get_positions()
         open_pos  = [p for p in positions if p.get("total_traded", 0) > 0]
-        # Resting orders: count trades.log entries from today with no 'result' field
-        # (settled trades have a result; open/resting ones don't yet)
+        n_pos     = len(open_pos)
+
+        # Resting orders: trades.log entries from today without a settled result
         resting_count = 0
+        today_iso = datetime.now(timezone.utc).date().isoformat()
         if TRADES_LOG.exists():
-            today = __import__("datetime").datetime.utcnow().date().isoformat()
             for line in TRADES_LOG.read_text().splitlines():
                 try:
-                    t = __import__("json").loads(line)
-                    if t.get("date", "").startswith(today) and not t.get("result"):
+                    t = json.loads(line)
+                    if t.get("date", "").startswith(today_iso) and not t.get("result"):
                         resting_count += 1
                 except Exception:
                     pass
-    except Exception as e:
-        await update.message.reply_text(f"Can't reach Kalshi right now. `{e}`", parse_mode="Markdown")
-        return
 
-    bankroll = float(os.getenv("APEX_BANKROLL", "150"))
-    mode     = os.getenv("APEX_ENV", "paper").upper()
-    paused   = PAUSE_FLAG.exists()
-    n_pos    = len(open_pos)
-
-    # Daily P&L from snapshots
-    pnl_str = "P&L: unknown (no snapshot yet)"
-    try:
+        # ── Daily P&L from snapshots ───────────────────────────────────────────
+        pnl_str = "P&L: no snapshot yet"
         if DAILY_SNAPSHOTS.exists():
-            snaps = __import__("json").loads(DAILY_SNAPSHOTS.read_text())
-            import datetime as _dt
-            today = _dt.date.today().isoformat()
-            yesterday = (_dt.date.today() - _dt.timedelta(days=1)).isoformat()
-            yval = snaps.get(yesterday)
+            snaps = json.loads(DAILY_SNAPSHOTS.read_text())
+            from datetime import date, timedelta
+            yesterday_iso = (date.today() - timedelta(days=1)).isoformat()
+            yval = snaps.get(yesterday_iso)
             if yval is not None:
                 change = balance - yval
                 sign = "+" if change >= 0 else ""
                 pnl_str = f"vs yesterday: {sign}${change:.2f} (was ${yval:.2f})"
-    except Exception:
-        pass
 
-    # Active strategies and last scan time from shared status dict
-    strategies   = _status_data.get("active_strategies", ["brain", "longshot", "weather"])
-    last_scan    = _status_data.get("last_scan", "not yet")
-    if last_scan != "not yet":
-        try:
-            import datetime as _dt
-            ls = _dt.datetime.fromisoformat(last_scan)
-            mins_ago = int((_dt.datetime.now(_dt.timezone.utc) - ls).total_seconds() / 60)
+        # ── Shared status data (set by apex_agent at each scan) ───────────────
+        strategies = _status_data.get("active_strategies", ["brain", "longshot", "weather"])
+        last_scan  = _status_data.get("last_scan", "not yet")
+        if last_scan != "not yet":
+            ls = datetime.fromisoformat(last_scan)
+            mins_ago = int((datetime.now(timezone.utc) - ls).total_seconds() / 60)
             last_scan = f"{mins_ago}m ago"
-        except Exception:
-            pass
 
-    status_icon = "PAUSED" if paused else mode
-    lines = [
-        f"*APEX [{status_icon}]*",
-        f"Balance: `${balance:.2f}` | {pnl_str}",
-        f"Open positions: `{n_pos}` | Resting orders today: `{resting_count}`",
-        f"Active strategies: {', '.join(strategies)}",
-        f"Last scan: {last_scan}",
-    ]
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        paused      = PAUSE_FLAG.exists()
+        mode        = os.getenv("APEX_ENV", "paper").upper()
+        status_icon = "PAUSED" if paused else mode
+
+        # Note: avoid [ ] in Markdown mode — Telegram treats them as link syntax
+        lines = [
+            f"*APEX — {status_icon}*",
+            f"Balance: `${balance:.2f}` | {pnl_str}",
+            f"Open positions: `{n_pos}` | Resting orders today: `{resting_count}`",
+            f"Active strategies: {', '.join(strategies)}",
+            f"Last scan: {last_scan}",
+        ]
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+    except Exception as e:
+        logger.error("_cmd_status failed: %s", e)
+        # No parse_mode on the error reply — e may contain characters that break Markdown
+        await update.message.reply_text(f"Status error: {e}")
 
 
 @_guarded
