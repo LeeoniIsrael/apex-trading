@@ -36,10 +36,11 @@ from kalshi_client import KalshiClient
 
 logger = logging.getLogger(__name__)
 
-BANKROLL        = float(os.getenv("APEX_BANKROLL", "150.0"))
-PAPER_MODE      = os.getenv("APEX_ENV", "paper").lower() == "paper"
-BET_USD         = 5.0
-TRADES_LOG_PATH = Path(os.getenv("TRADES_LOG", "/opt/apex/trades.log"))
+BANKROLL         = float(os.getenv("APEX_BANKROLL", "150.0"))
+PAPER_MODE       = os.getenv("APEX_ENV", "paper").lower() == "paper"
+BET_USD          = 5.0
+TRADES_LOG_PATH  = Path(os.getenv("TRADES_LOG", "/opt/apex/trades.log"))
+CASH_RESERVE_PCT = 0.25  # Keep 25% of bankroll as cash reserve (Change 6)
 
 COINGECKO_URL = (
     "https://api.coingecko.com/api/v3/simple/price"
@@ -76,6 +77,24 @@ def _fetch_fear_greed() -> tuple[int, str]:
     resp.raise_for_status()
     entry = resp.json()["data"][0]
     return int(entry["value"]), entry["value_classification"]
+
+
+def _cash_reserve_ok(client: KalshiClient, bet_usd: float) -> bool:
+    """Return True if placing bet_usd won't breach the 25% cash reserve (Change 6)."""
+    try:
+        bal_data = client.get_balance()
+        cash_usd = bal_data.get("balance", 0) / 100
+        reserve_floor = BANKROLL * CASH_RESERVE_PCT
+        if (cash_usd - bet_usd) < reserve_floor:
+            logger.info(
+                "SKIP — cash reserve floor reached (balance=$%.2f, bet=$%.2f, floor=$%.2f)",
+                cash_usd, bet_usd, reserve_floor,
+            )
+            return False
+        return True
+    except Exception as e:
+        logger.warning("Cash reserve check failed: %s — allowing bet", e)
+        return True
 
 
 def _find_btc_direction_market(client: KalshiClient) -> dict | None:
@@ -185,6 +204,13 @@ def run_btc_direction() -> dict | None:
     yes_price   = KalshiClient.yes_price_cents(market)
     price_cents = yes_price if side == "yes" else (100 - yes_price)
     contracts   = max(1, int(BET_USD))
+    cost_usd    = round(contracts * price_cents / 100, 2)
+
+    # Change 6: cash reserve check
+    if not _cash_reserve_ok(client, cost_usd):
+        logger.info("SKIP %s — protecting 25%% cash reserve", ticker)
+        asyncio.run(tg.send_message("BTC direction: SKIP — cash reserve floor reached"))
+        return None
 
     logger.info(
         "BTC DIRECTION %s — side=%s price=%d¢ contracts=%d | %s",
@@ -204,7 +230,6 @@ def run_btc_direction() -> dict | None:
         return None
 
     _TRADED_TODAY.add(ticker)
-    cost_usd = round(contracts * price_cents / 100, 2)
 
     entry = {
         "date":             datetime.now(timezone.utc).isoformat(),

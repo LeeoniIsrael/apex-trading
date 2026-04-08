@@ -5,6 +5,7 @@ Analyzes Kalshi markets and returns structured trade recommendations.
 import json
 import logging
 import os
+import re as _re
 import time
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,27 @@ logger = logging.getLogger(__name__)
 
 MIN_EDGE = 0.07  # 7% minimum edge (raised per favourite-longshot bias research)
 MARKET_INTEL_PATH = Path(__file__).parent / "market_intel.json"
+
+# Change 3: Category guardrails.
+# BLOCKED_CATEGORIES: no algorithmic edge exists — skip without any Claude call.
+# PREFERRED_CATEGORIES: use for future scoring/prioritisation logic.
+BLOCKED_CATEGORIES = frozenset({
+    "crypto",         # price bracket structure makes systematic betting unprofitable
+    "crypto_bracket", # explicit sub-type
+    "entertainment",  # no reliable signal for algorithmic trading
+    "culture",        # no reliable signal for algorithmic trading
+})
+PREFERRED_CATEGORIES = frozenset({
+    "sports",
+    "weather",
+    "economics",
+})
+
+# Change 5: Fee-optimized price filter.
+# Kalshi fees are highest (3–7%) for contracts priced 40¢–60¢.
+# Only bet contracts priced < 35¢ or > 65¢ to preserve edge.
+FEE_TRAP_LOW  = 40
+FEE_TRAP_HIGH = 60
 
 SYSTEM_PROMPT = """You are APEX, an autonomous prediction market trading agent.
 Your job is to analyze Kalshi prediction market questions and determine if there is a
@@ -132,31 +154,41 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
     """
     from kalshi_client import KalshiClient
 
-    # Skip crypto price bracket markets entirely — betting NO on multiple brackets
-    # creates structural loss risk where one YES wipes out multiple NO wins.
-    _title_raw = market.get("_event_title") or market.get("title", "")
-    _cat_raw = market.get("_event_category") or market.get("category", "")
-    _ticker_raw = market.get("ticker", "")
+    ticker_raw   = market.get("ticker", "")
+    title_raw    = market.get("_event_title") or market.get("title", "Unknown")
+    category_raw = (market.get("_event_category") or market.get("category", "")).lower()
+
+    # Change 1/3: Skip crypto price bracket markets entirely — structural loss risk
+    # (also caught by BLOCKED_CATEGORIES but keeping the keyword check as belt-and-braces)
     if any(
-        k in _title_raw.lower() or k in _cat_raw.lower() or k in _ticker_raw.lower()
+        k in title_raw.lower() or k in category_raw or k in ticker_raw.lower()
         for k in _CRYPTO_KEYWORDS
     ):
-        logger.info("SKIP %s — crypto bracket, structural loss risk", _ticker_raw)
+        logger.info("SKIP %s — crypto bracket, structural loss risk", ticker_raw)
         return _skip_result("crypto bracket, structural loss risk")
+
+    # Change 3: Hard category block — no Claude API call, no cost
+    if category_raw in BLOCKED_CATEGORIES:
+        logger.info("HARD BLOCK — category [%s] blocked from trading [%s]", category_raw, ticker_raw)
+        return _skip_result(f"HARD BLOCK — category [{category_raw}] blocked from trading")
+
+    yes_price = KalshiClient.yes_price_cents(market)
+
+    # Change 5: Fee trap filter — avoid mid-range contracts where fees eat edge
+    if FEE_TRAP_LOW <= yes_price <= FEE_TRAP_HIGH:
+        logger.info("SKIP %s — mid-range fee trap (40-60¢) price=%d¢", ticker_raw, yes_price)
+        return _skip_result("mid-range fee trap (40-60¢)")
+
+    no_price = 100 - yes_price
+    title    = title_raw
+    category = category_raw
+    volume   = market.get("volume_fp") or market.get("volume", 0)
 
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-    yes_price = KalshiClient.yes_price_cents(market)
-    no_price = 100 - yes_price
-
-    # title: prefer event title injected by get_markets, fall back to market title
-    title = market.get("_event_title") or market.get("title", "Unknown")
-    category = market.get("_event_category") or market.get("category", "unknown")
-    volume = market.get("volume_fp") or market.get("volume", 0)
-
     prompt = MARKET_PROMPT.format(
         title=title,
-        ticker=market.get("ticker", ""),
+        ticker=ticker_raw,
         yes_price=yes_price,
         no_price=no_price,
         yes_prob=yes_price / 100,
@@ -168,7 +200,7 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
 
     use_search, skip_reason = _needs_web_search(title, category)
     if not use_search:
-        logger.info("SKIP web_search — %s [%s]", skip_reason, market.get("ticker"))
+        logger.info("SKIP web_search — %s [%s]", skip_reason, ticker_raw)
 
     # Inject live calibration data into system prompt
     try:
@@ -221,21 +253,18 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
             messages=[{"role": "user", "content": prompt + no_search_note}],
         )
 
-        # Extract the text content from the response
+        # Extract the text content from the response.
         # Claude may return tool_use blocks followed by a text block, or text only.
-        # Collect all text blocks; if none exist, the model returned only tool calls.
         result_text = ""
         for block in response.content:
             if hasattr(block, "text"):
                 result_text += block.text
 
         if not result_text.strip():
-            # Claude returned only tool_use blocks (web search) with no final text.
-            # This happens when the model decides the search result IS the answer.
-            # Retry without web_search so it must synthesize a text response.
+            # Claude returned only tool_use blocks — retry without web_search
             logger.warning(
                 "No text block from Claude for %s — retrying without web_search",
-                market.get("ticker"),
+                ticker_raw,
             )
             retry_response = client.messages.create(
                 model="claude-haiku-4-5-20251001",
@@ -252,21 +281,17 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
                     result_text += block.text
 
         if not result_text.strip():
-            logger.warning("Empty response from Claude for market %s", market.get("ticker"))
+            logger.warning("Empty response from Claude for market %s", ticker_raw)
             return _skip_result("Empty Claude response")
 
-        import json, re as _re
-
-        # 1. Try to extract JSON object from anywhere in the text
+        # Parse JSON — strip markdown fences and find first {...} block
         cleaned = result_text.strip()
 
-        # Strip markdown fences
         if "```" in cleaned:
             m = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, _re.DOTALL)
             if m:
                 cleaned = m.group(1)
 
-        # If still not a bare JSON object, find the first {...} block
         if not cleaned.startswith("{"):
             m = _re.search(r"\{[^{}]*\"action\"[^{}]*\}", cleaned, _re.DOTALL)
             if m:
@@ -274,14 +299,13 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
             else:
                 logger.warning(
                     "No JSON object found in response for %s — text: %s",
-                    market.get("ticker"), cleaned[:200],
+                    ticker_raw, cleaned[:200],
                 )
                 return _skip_result("No JSON in Claude response")
 
         result = json.loads(cleaned)
 
         # Validate and enforce minimum edge
-        action = result.get("action", "SKIP")
         edge = abs(float(result.get("edge", 0)))
         confidence = float(result.get("confidence", 0))
 
@@ -294,12 +318,12 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
 
         logger.info(
             "brain.analyze_market | ticker=%s action=%s edge=%.3f confidence=%.2f",
-            market.get("ticker"), result.get("action"), edge, confidence,
+            ticker_raw, result.get("action"), edge, confidence,
         )
         return result
 
     except Exception as e:
-        logger.error("brain.analyze_market failed for %s: %s", market.get("ticker"), e)
+        logger.error("brain.analyze_market failed for %s: %s", ticker_raw, e)
         return _skip_result(str(e))
 
 

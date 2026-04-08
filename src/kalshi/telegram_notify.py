@@ -44,8 +44,18 @@ except ImportError:
     logger.warning("python-telegram-bot not installed; Telegram disabled.")
 
 # ── Paths & constants ──────────────────────────────────────────────────────────
-PAUSE_FLAG = Path("/opt/apex/paused.flag")
-TRADES_LOG  = Path("/opt/apex/trades.log")
+PAUSE_FLAG        = Path("/opt/apex/paused.flag")
+TRADES_LOG        = Path("/opt/apex/trades.log")
+DAILY_SNAPSHOTS   = Path("/opt/apex/daily_snapshots.json")
+
+# ── Shared status dict — written by apex_agent, read by /status handler ───────
+# Change 9: apex_agent calls update_status() after each scan so /status shows live data.
+_status_data: dict = {}
+
+
+def update_status(key: str, value) -> None:
+    """Update a key in the shared status dict. Called by apex_agent at runtime."""
+    _status_data[key] = value
 RATE_LIMIT_MAX    = 5
 RATE_LIMIT_WINDOW = 60  # seconds
 
@@ -219,32 +229,74 @@ async def _cmd_start(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> 
 
 @_guarded
 async def _cmd_status(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    """
+    Change 9: Full status report — balance, resting orders, positions,
+    today's P&L vs yesterday, active strategies, last scan time.
+    """
     try:
         client    = _make_kalshi_client()
         bal_data  = client.get_balance()
         balance   = bal_data.get("balance", 0) / 100
         positions = client.get_positions()
         open_pos  = [p for p in positions if p.get("total_traded", 0) > 0]
-        bankroll  = float(os.getenv("APEX_BANKROLL", "150"))
-        mode      = os.getenv("APEX_ENV", "paper").upper()
-        paused    = PAUSE_FLAG.exists()
-        pnl       = balance - bankroll
-        n         = len(open_pos)
-        pos_str   = f"{n} position{'s' if n != 1 else ''} open"
-
-        if paused:
-            text = f"Paused. {pos_str}. Balance `${balance:.2f}`."
-        elif not TRADES_LOG.exists() or TRADES_LOG.stat().st_size == 0:
-            text = f"No trades yet. Paper mode, scanning markets."
-        elif abs(pnl) < 0.01:
-            text = f"Flat. {pos_str}. Waiting for edge."
-        elif pnl > 0:
-            text = f"Up `${pnl:.2f}`. {pos_str}. Looking clean."
-        else:
-            text = f"Down `${abs(pnl):.2f}`. {pos_str}. Still within limits."
+        # Resting orders: count trades.log entries from today with no 'result' field
+        # (settled trades have a result; open/resting ones don't yet)
+        resting_count = 0
+        if TRADES_LOG.exists():
+            today = __import__("datetime").datetime.utcnow().date().isoformat()
+            for line in TRADES_LOG.read_text().splitlines():
+                try:
+                    t = __import__("json").loads(line)
+                    if t.get("date", "").startswith(today) and not t.get("result"):
+                        resting_count += 1
+                except Exception:
+                    pass
     except Exception as e:
-        text = f"Can't reach Kalshi right now. `{e}`"
-    await update.message.reply_text(text, parse_mode="Markdown")
+        await update.message.reply_text(f"Can't reach Kalshi right now. `{e}`", parse_mode="Markdown")
+        return
+
+    bankroll = float(os.getenv("APEX_BANKROLL", "150"))
+    mode     = os.getenv("APEX_ENV", "paper").upper()
+    paused   = PAUSE_FLAG.exists()
+    n_pos    = len(open_pos)
+
+    # Daily P&L from snapshots
+    pnl_str = "P&L: unknown (no snapshot yet)"
+    try:
+        if DAILY_SNAPSHOTS.exists():
+            snaps = __import__("json").loads(DAILY_SNAPSHOTS.read_text())
+            import datetime as _dt
+            today = _dt.date.today().isoformat()
+            yesterday = (_dt.date.today() - _dt.timedelta(days=1)).isoformat()
+            yval = snaps.get(yesterday)
+            if yval is not None:
+                change = balance - yval
+                sign = "+" if change >= 0 else ""
+                pnl_str = f"vs yesterday: {sign}${change:.2f} (was ${yval:.2f})"
+    except Exception:
+        pass
+
+    # Active strategies and last scan time from shared status dict
+    strategies   = _status_data.get("active_strategies", ["brain", "longshot", "weather"])
+    last_scan    = _status_data.get("last_scan", "not yet")
+    if last_scan != "not yet":
+        try:
+            import datetime as _dt
+            ls = _dt.datetime.fromisoformat(last_scan)
+            mins_ago = int((_dt.datetime.now(_dt.timezone.utc) - ls).total_seconds() / 60)
+            last_scan = f"{mins_ago}m ago"
+        except Exception:
+            pass
+
+    status_icon = "PAUSED" if paused else mode
+    lines = [
+        f"*APEX [{status_icon}]*",
+        f"Balance: `${balance:.2f}` | {pnl_str}",
+        f"Open positions: `{n_pos}` | Resting orders today: `{resting_count}`",
+        f"Active strategies: {', '.join(strategies)}",
+        f"Last scan: {last_scan}",
+    ]
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
 @_guarded
@@ -336,6 +388,7 @@ def get_trades_summary() -> str:
     return "\n".join(rows)
 
 
+@_guarded  # self-fix: was missing auth decorator — anyone could call this
 async def _cmd_trades(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
     try:
         summary = get_trades_summary()

@@ -43,6 +43,17 @@ KELLY_FRACTION  = 0.15
 MAX_BET_USD     = 15.0
 EDGE_THRESHOLD  = 0.08   # 8% minimum model vs market gap
 TRADES_LOG_PATH = Path(os.getenv("TRADES_LOG", "/opt/apex/trades.log"))
+CASH_RESERVE_PCT = 0.25  # Keep 25% of bankroll as cash reserve (Change 6)
+
+# Liquidity thresholds (Change 4)
+MIN_VOL_WEATHER      = 500
+VOL_CAP_THRESH       = 2000
+LOW_LIQ_MAX_BET      = 3.0
+
+# Kalshi Volume Incentive Program (VIP) — through September 2026 (Change 2):
+#   - $0.005 cashback per contract for trades priced 3¢–97¢
+#   - $10–$1000 daily liquidity rewards for resting limit orders
+# Every order placed here is a resting limit order to qualify.
 
 OPEN_METEO_URL = "https://ensemble-api.open-meteo.com/v1/ensemble"
 
@@ -170,6 +181,24 @@ def _recently_traded(ticker: str, side: str, hours: int = 24) -> bool:
     return False
 
 
+def _cash_reserve_ok(client: KalshiClient, bet_usd: float) -> bool:
+    """Return True if placing bet_usd won't breach the 25% cash reserve (Change 6)."""
+    try:
+        bal_data = client.get_balance()
+        cash_usd = bal_data.get("balance", 0) / 100
+        reserve_floor = BANKROLL * CASH_RESERVE_PCT
+        if (cash_usd - bet_usd) < reserve_floor:
+            logger.info(
+                "SKIP — cash reserve floor reached (balance=$%.2f, bet=$%.2f, floor=$%.2f)",
+                cash_usd, bet_usd, reserve_floor,
+            )
+            return False
+        return True
+    except Exception as e:
+        logger.warning("Cash reserve check failed: %s — allowing bet", e)
+        return True
+
+
 def _log_trade(entry: dict) -> None:
     try:
         with open(TRADES_LOG_PATH, "a") as f:
@@ -242,6 +271,15 @@ def run_weather_scan() -> list[dict]:
                 logger.info("SKIP %s — already traded today (trades.log 24h lookback)", ticker)
                 continue
 
+            # Change 4: liquidity filter
+            try:
+                mkt_vol = float(market.get("volume_fp") or market.get("volume", 0) or 0)
+            except (ValueError, TypeError):
+                mkt_vol = 0.0
+            if mkt_vol < MIN_VOL_WEATHER:
+                logger.info("SKIP %s — volume %.0f < %d (liquidity floor)", ticker, mkt_vol, MIN_VOL_WEATHER)
+                continue
+
             our_p      = model_p        if side == "yes" else (1.0 - model_p)
             market_p   = kalshi_p       if side == "yes" else (1.0 - kalshi_p)
             limit_price = yes_price_cents if side == "yes" else (100 - yes_price_cents)
@@ -264,7 +302,22 @@ def run_weather_scan() -> list[dict]:
                 max_pct=0.10,
             )
             bet_usd   = min(max(bet_usd, 1.0), MAX_BET_USD)
+
+            # Change 4: cap bet at $3 for thin markets
+            if mkt_vol < VOL_CAP_THRESH:
+                bet_usd = min(bet_usd, LOW_LIQ_MAX_BET)
+                logger.info(
+                    "LOW LIQUIDITY cap on %s (vol=%.0f < %d) — capping bet at $%.2f",
+                    ticker, mkt_vol, VOL_CAP_THRESH, LOW_LIQ_MAX_BET,
+                )
+
             contracts = max(1, int(bet_usd))
+            cost_est  = round(contracts * limit_price / 100, 2)
+
+            # Change 6: cash reserve check
+            if not _cash_reserve_ok(client, cost_est):
+                logger.info("SKIP %s — protecting 25%% cash reserve", ticker)
+                continue
 
             try:
                 result = client.place_limit_order(
@@ -274,6 +327,12 @@ def run_weather_scan() -> list[dict]:
             except Exception as e:
                 logger.error("Weather order failed %s: %s", ticker, e)
                 continue
+
+            # Change 2: VIP cashback program log
+            logger.info(
+                "LIMIT ORDER placed — qualifies for VIP cashback program (%s, %d¢ × %d contracts)",
+                ticker, limit_price, contracts,
+            )
 
             cost_usd = round(contracts * limit_price / 100, 2)
             entry = {
