@@ -71,15 +71,18 @@ DAILY_SNAPSHOTS   = Path("/opt/apex/daily_snapshots.json")  # Change 8
 DAILY_CLAUDE_BUDGET  = 20          # 20 Claude calls/day — protects $5 credits (~50 days)
 PAPER_MODE           = os.getenv("APEX_ENV", "paper").lower() == "paper"
 BANKROLL             = float(os.getenv("APEX_BANKROLL", "150.0"))
-KELLY_FRACTION       = float(os.getenv("KELLY_FRACTION", "0.35"))
-MAX_POSITION_PCT     = float(os.getenv("MAX_POSITION_PCT", "0.10"))  # 10% per position
+KELLY_FRACTION       = float(os.getenv("KELLY_FRACTION", "0.60"))
+MAX_POSITION_PCT     = float(os.getenv("MAX_POSITION_PCT", "0.20"))  # 20% of deployable bankroll
 MAX_POSITIONS        = 20          # more concurrent open positions
 MIN_VOLUME           = 50          # lower volume floor — more markets eligible
 MIN_HOURS_TO_CLOSE   = 0.5         # 30 min minimum (catch late-breaking opportunities)
 MAX_DAYS_TO_CLOSE    = 7           # up to 7 days — enables elections, world events
 
-# Cash reserve — 10% floor (down from 25%) — more aggressive deployment
-CASH_RESERVE_PCT     = 0.10
+# Bankroll protection safety net. This slice is never risked by Kelly sizing.
+PROTECTED_BANKROLL_PCT = float(os.getenv("PROTECTED_BANKROLL_PCT", "0.35"))
+
+# Cash reserve guard for post-order available cash.
+CASH_RESERVE_PCT     = float(os.getenv("CASH_RESERVE_PCT", "0.20"))
 
 # Daily circuit breaker — $75/day allows meaningful capital deployment
 DAILY_LOSS_LIMIT_USD = 75.0
@@ -171,7 +174,7 @@ def _increment_daily_budget(data: dict) -> None:
 
 def _check_cash_reserve(client: KalshiClient, bet_usd: float) -> bool:
     """
-    Return True if placing bet_usd won't breach the 25% cash reserve (Change 6).
+    Return True if placing bet_usd won't breach the configured cash reserve.
     Fails open on API errors.
     """
     try:
@@ -321,6 +324,7 @@ def scan_markets() -> None:
             market_probability=market_prob,
             kelly_fraction=KELLY_FRACTION,
             max_pct=MAX_POSITION_PCT,
+            protected_bankroll_pct=PROTECTED_BANKROLL_PCT,
         )
 
         if bet_usd <= 0:
@@ -338,7 +342,10 @@ def scan_markets() -> None:
 
         # Change 6: cash reserve check
         if not _check_cash_reserve(client, bet_usd):
-            logger.info("SKIP — cash reserve floor reached, protecting 25%% reserve")
+            logger.info(
+                "SKIP — cash reserve floor reached, protecting %.0f%% reserve",
+                CASH_RESERVE_PCT * 100,
+            )
             continue
 
         side = "yes" if action == "BUY_YES" else "no"
