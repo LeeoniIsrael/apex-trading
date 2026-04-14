@@ -82,16 +82,17 @@ CASH_RESERVE_PCT     = 0.25
 
 # Change 7: Daily loss circuit breaker — if total deployed today exceeds this,
 # pause all new bets for the rest of the day and alert via Telegram.
-DAILY_LOSS_LIMIT_USD = 20.0
+# Raised from $20 to $30 to allow more flexibility with NBA playoffs and elections.
+DAILY_LOSS_LIMIT_USD = 30.0
 
 # Liquidity thresholds (Change 4) — mirrors longshot_fade.py
 MIN_VOLUME_HARD   = 500    # skip entirely below this
 VOL_CAP_THRESH    = 2000   # cap bet at $3 below this
 LOW_LIQ_MAX_BET   = 3.0
 
-# Fee trap filter (Change 5) — avoid 40-60¢ mid-range contracts
-FEE_TRAP_LOW  = 40
-FEE_TRAP_HIGH = 60
+# Fee trap filter (Change 5) — avoid 43-57¢ mid-range contracts (narrowed from 40-60)
+FEE_TRAP_LOW  = 43
+FEE_TRAP_HIGH = 57
 
 
 def _get_client() -> KalshiClient:
@@ -237,9 +238,9 @@ def scan_markets() -> None:
         logger.warning("Could not fetch positions: %s", e)
         positions_used = 0
 
-    # Fetch markets
+    # Fetch markets — 50 gives brain.py a wider view of the market landscape
     try:
-        markets = client.get_markets(limit=20)
+        markets = client.get_markets(limit=50)
     except Exception as e:
         logger.error("Failed to fetch markets: %s", e)
         asyncio.run(tg.send_error(f"Market fetch failed: {e}"))

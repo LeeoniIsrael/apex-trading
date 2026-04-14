@@ -14,7 +14,7 @@ import anthropic
 
 logger = logging.getLogger(__name__)
 
-MIN_EDGE = 0.07  # 7% minimum edge (raised per favourite-longshot bias research)
+MIN_EDGE = 0.06  # 6% minimum edge — slightly relaxed to allow more political/world trades
 MARKET_INTEL_PATH = Path(__file__).parent / "market_intel.json"
 
 # Change 3: Category guardrails.
@@ -33,10 +33,11 @@ PREFERRED_CATEGORIES = frozenset({
 })
 
 # Change 5: Fee-optimized price filter.
-# Kalshi fees are highest (3–7%) for contracts priced 40¢–60¢.
-# Only bet contracts priced < 35¢ or > 65¢ to preserve edge.
-FEE_TRAP_LOW  = 40
-FEE_TRAP_HIGH = 60
+# Kalshi fees are highest (3–7%) for contracts priced 43¢–57¢.
+# Narrowed from 40-60 to 43-57 to allow brain.py to engage with elections
+# and world markets typically priced near 40-43¢ or 57-60¢.
+FEE_TRAP_LOW  = 43
+FEE_TRAP_HIGH = 57
 
 SYSTEM_PROMPT = """You are APEX, an autonomous prediction market trading agent.
 Your job is to analyze Kalshi prediction market questions and determine if there is a
@@ -92,7 +93,7 @@ Return JSON with exactly these fields:
   "reasoning": "<1-2 sentence explanation>"
 }}
 
-Only return BUY_YES or BUY_NO if |edge| > 0.07 AND confidence > 0.6 AND market price is between 25-85 cents.
+Only return BUY_YES or BUY_NO if |edge| > 0.06 AND confidence > 0.6 AND market price is between 25-85 cents.
 """
 
 
@@ -312,7 +313,7 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
         if edge < MIN_EDGE or confidence < 0.6:
             result["action"] = "SKIP"
             result["reasoning"] = (
-                f"Edge {edge:.1%} or confidence {confidence:.0%} below threshold. "
+                f"Edge {edge:.1%} or confidence {confidence:.0%} below threshold (min edge 6%). "
                 + result.get("reasoning", "")
             )
 

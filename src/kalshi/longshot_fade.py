@@ -52,13 +52,14 @@ MAX_BET_USD     = 10.0
 TRADES_LOG_PATH = Path(os.getenv("TRADES_LOG", "/opt/apex/trades.log"))
 CASH_RESERVE_PCT = 0.25         # Keep 25% of bankroll as cash reserve (Change 6)
 
-# Longshot zone: YES price in [10, 20] cents.
+# Longshot zone: YES price in [10, 25] cents.
 # We skip the 5-9¢ range: at those extremes the market tends to be correct
 # (true long shots that almost never resolve YES). The structural bias is
-# strongest in the 10-20¢ band where retail bettors systematically overweight
-# small probabilities — these contracts win ~half as often as implied.
+# strongest in the 10-25¢ band where retail bettors systematically overweight
+# small probabilities. Extended to 25¢ to capture NBA playoff 1v8 / 2v7 seed
+# mismatches and any other market where the underdog is priced 21-25¢.
 LONGSHOT_LOW  = 10
-LONGSHOT_HIGH = 20
+LONGSHOT_HIGH = 25
 
 # Implied true probability adjustment — bias research shows 15¢ YES contracts
 # win ~8% of the time vs 15% implied. We model NO true prob = 0.90 (vs 0.85 implied).
@@ -194,9 +195,9 @@ def run_longshot_scan() -> list[dict]:
         logger.warning("Longshot scan: Kalshi client init failed: %s", e)
         return []
 
-    # Fetch a broad slice of open markets
+    # Fetch a broad slice of open markets — 200 to catch all current-day games
     try:
-        markets = client.get_markets(limit=50)
+        markets = client.get_markets(limit=200)
     except Exception as e:
         logger.warning("Longshot scan: market fetch failed: %s", e)
         return []
