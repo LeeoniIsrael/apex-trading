@@ -87,6 +87,10 @@ CASH_RESERVE_PCT     = float(os.getenv("CASH_RESERVE_PCT", "0.20"))
 # Daily circuit breaker — $75/day allows meaningful capital deployment
 DAILY_LOSS_LIMIT_USD = 75.0
 
+# Drawdown safety net — if balance falls 20% below starting bankroll, all strategies pause.
+# At $176 bankroll this is a $141.80 floor. Prevents a bad run from wiping the account.
+DRAWDOWN_PAUSE_PCT = 0.20
+
 # Liquidity thresholds
 MIN_VOLUME_HARD   = 100    # lowered from 500 — more markets eligible
 VOL_CAP_THRESH    = 1000   # cap at $5 below this
@@ -174,12 +178,26 @@ def _increment_daily_budget(data: dict) -> None:
 
 def _check_cash_reserve(client: KalshiClient, bet_usd: float) -> bool:
     """
-    Return True if placing bet_usd won't breach the configured cash reserve.
-    Fails open on API errors.
+    Return True only if:
+      1. Post-bet cash stays above CASH_RESERVE_PCT floor
+      2. Current balance hasn't dropped DRAWDOWN_PAUSE_PCT below starting BANKROLL
+    Fails open on API errors so transient issues don't permanently block all bets.
     """
     try:
         bal_data = client.get_balance()
         cash_usd = bal_data.get("balance", 0) / 100
+
+        # Drawdown guard — pause everything if we've lost too much from starting bankroll
+        drawdown_floor = BANKROLL * (1 - DRAWDOWN_PAUSE_PCT)
+        if cash_usd < drawdown_floor:
+            logger.warning(
+                "DRAWDOWN PAUSE — balance=$%.2f < floor=$%.2f (%.0f%% drawdown limit). "
+                "All bets paused until balance recovers.",
+                cash_usd, drawdown_floor, DRAWDOWN_PAUSE_PCT * 100,
+            )
+            return False
+
+        # Per-bet reserve floor
         reserve_floor = BANKROLL * CASH_RESERVE_PCT
         if (cash_usd - bet_usd) < reserve_floor:
             logger.info(

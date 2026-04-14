@@ -56,8 +56,8 @@ TRADES_LOG_PATH = Path(os.getenv("TRADES_LOG", "/opt/apex/trades.log"))
 BASE_BET_USD    = float(os.getenv("CRYPTO_BASE_BET_USD", "5.0"))
 CRYPTO_BET_MULTIPLIER = float(os.getenv("CRYPTO_BET_MULTIPLIER", "4.0"))
 MAX_BET_USD     = float(os.getenv("CRYPTO_MAX_BET_USD", "30.0"))
-MAX_POSITIONS   = 3      # max concurrent crypto scalp positions
-BUFFER_PCT      = 0.03   # require 3% price buffer from threshold for entry
+MAX_POSITIONS   = 2      # max 1 BTC + 1 ETH at a time
+BUFFER_PCT      = 0.05   # require 5% price buffer — ETH/BTC move 3-5% in hours
 MIN_HOURS       = 0.5    # at least 30 min to close
 MAX_HOURS       = 4.0    # no more than 4 hours out
 MAX_ENTRY_CENTS = 93     # don't enter if already >93¢ (fully priced in, no room)
@@ -65,9 +65,10 @@ MAX_ENTRY_CENTS = 93     # don't enter if already >93¢ (fully priced in, no roo
 _COINGECKO_URL  = "https://api.coingecko.com/api/v3/simple/price"
 _TRACKED_FILE   = Path("/opt/apex/crypto_scalp_positions.json")
 
-# Ticker regex: KXBTC-26APR1417-B74000 or KXETH-26APR1417-T2250
+# Ticker regex: KXBTC-26APR1417-B74000 → groups: asset, date, hour, direction, threshold
+# hour is extracted to enforce one-position-per-asset-per-close-hour dedup
 _CRYPTO_RE = re.compile(
-    r"^KX(BTC|ETH)-\d{2}[A-Z]{3}\d{4}-([BT])(\d+)$"
+    r"^KX(BTC|ETH)-(\d{2}[A-Z]{3}\d{2})(\d{2})-([BT])(\d+)$"
 )
 
 
@@ -93,39 +94,48 @@ def _get_live_prices() -> dict[str, float]:
 def _parse_ticker(ticker: str) -> dict | None:
     """
     Parse a crypto bracket ticker.
-    Returns {asset, direction, threshold} or None.
+    Returns {asset, close_key, direction, threshold} or None.
       B = "above" (YES wins if price > threshold)
       T = "below" (YES wins if price <= threshold)
+    close_key = "{asset}_{date}{hour}" e.g. "eth_26APR1404"
+    Used for one-position-per-asset-per-close-hour dedup.
     """
     m = _CRYPTO_RE.match(ticker)
     if not m:
         return None
-    asset_raw, direction_char, number_str = m.group(1), m.group(2), m.group(3)
+    asset_raw, date_str, hour_str, direction_char, number_str = (
+        m.group(1), m.group(2), m.group(3), m.group(4), m.group(5)
+    )
     return {
         "asset":     asset_raw.lower(),
+        "close_key": f"{asset_raw.lower()}_{date_str}{hour_str}",
         "direction": "above" if direction_char == "B" else "below",
         "threshold": float(number_str),
     }
 
 
 def _load_tracked() -> set[str]:
-    """Load tickers we've already entered scalp positions on today."""
+    """
+    Load close_keys already entered today — format: "{asset}_{date}{hour}".
+    One entry per asset per close-hour prevents correlated multi-bracket exposure
+    (the bug that caused all 3 ETH positions to lose simultaneously on 2026-04-14).
+    """
     try:
         if _TRACKED_FILE.exists():
             data = json.loads(_TRACKED_FILE.read_text())
             today = datetime.now(timezone.utc).date().isoformat()
             if data.get("date") == today:
-                return set(data.get("tickers", []))
+                return set(data.get("close_keys", []))
     except Exception:
         pass
     return set()
 
 
-def _save_tracked(tickers: set[str]) -> None:
+def _save_tracked(close_keys: set[str]) -> None:
     try:
         _TRACKED_FILE.write_text(json.dumps({
-            "date":    datetime.now(timezone.utc).date().isoformat(),
-            "tickers": list(tickers),
+            "date":       datetime.now(timezone.utc).date().isoformat(),
+            "close_keys": list(close_keys),
         }))
     except Exception as e:
         logger.warning("Could not save crypto_scalp_positions: %s", e)
@@ -204,17 +214,21 @@ def run_crypto_scalp() -> list[dict]:
 
     for market in markets:
         ticker = market.get("ticker", "")
-        if ticker in tracked:
-            continue
 
         parsed = _parse_ticker(ticker)
         if not parsed:
             continue
 
         asset     = parsed["asset"]
+        close_key = parsed["close_key"]
         direction = parsed["direction"]
         threshold = parsed["threshold"]
         spot      = btc if asset == "btc" else eth
+
+        # One position per asset per close-hour — prevents correlated multi-bracket loss
+        if close_key in tracked:
+            logger.debug("SKIP %s — already have %s position this close window", ticker, asset.upper())
+            continue
 
         if spot == 0:
             continue
@@ -278,7 +292,7 @@ def run_crypto_scalp() -> list[dict]:
             logger.error("Crypto scalp order failed %s: %s", ticker, e)
             continue
 
-        tracked.add(ticker)
+        tracked.add(close_key)
         entry = {
             "date":               datetime.now(timezone.utc).isoformat(),
             "strategy":           "crypto_scalp",

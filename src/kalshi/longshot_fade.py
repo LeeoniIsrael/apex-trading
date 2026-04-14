@@ -48,9 +48,10 @@ logger = logging.getLogger(__name__)
 BANKROLL        = float(os.getenv("APEX_BANKROLL", "150.0"))
 PAPER_MODE      = os.getenv("APEX_ENV", "paper").lower() == "paper"
 KELLY_FRACTION  = 0.25          # Raised from 0.20 — more aggressive on proven structural edge
-MAX_BET_USD     = 20.0          # Raised from $10 — larger positions when Kelly calls for it
+MAX_BET_USD     = 35.0          # Larger bets on our most proven strategy (91% win rate)
 TRADES_LOG_PATH = Path(os.getenv("TRADES_LOG", "/opt/apex/trades.log"))
-CASH_RESERVE_PCT = 0.10         # Lowered from 25% to 10% — more aggressive deployment
+CASH_RESERVE_PCT = 0.10
+DRAWDOWN_PAUSE_PCT = 0.20       # Pause if balance drops 20% below BANKROLL
 
 # Longshot zone: YES price in [10, 25] cents.
 # We skip the 5-9¢ range: at those extremes the market tends to be correct
@@ -140,12 +141,22 @@ def _recently_traded(ticker: str, side: str, hours: int = 24) -> bool:
 
 def _cash_reserve_ok(client: KalshiClient, bet_usd: float) -> bool:
     """
-    Return True if placing bet_usd won't breach the 25% cash reserve floor (Change 6).
-    Fails open on API errors to avoid blocking all bets from a transient issue.
+    Return True only if drawdown limit isn't hit and cash reserve floor is intact.
+    Fails open on API errors so transient issues don't block all bets.
     """
     try:
         bal_data = client.get_balance()
         cash_usd = bal_data.get("balance", 0) / 100  # Kalshi returns cents
+
+        # Drawdown safety net — stop all bets if balance drops 20% from starting bankroll
+        drawdown_floor = BANKROLL * (1 - DRAWDOWN_PAUSE_PCT)
+        if cash_usd < drawdown_floor:
+            logger.warning(
+                "DRAWDOWN PAUSE — balance=$%.2f < floor=$%.2f. Longshot fade paused.",
+                cash_usd, drawdown_floor,
+            )
+            return False
+
         reserve_floor = BANKROLL * CASH_RESERVE_PCT
         if (cash_usd - bet_usd) < reserve_floor:
             logger.info(
