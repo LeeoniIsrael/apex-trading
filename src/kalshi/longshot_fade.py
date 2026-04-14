@@ -47,10 +47,10 @@ logger = logging.getLogger(__name__)
 
 BANKROLL        = float(os.getenv("APEX_BANKROLL", "150.0"))
 PAPER_MODE      = os.getenv("APEX_ENV", "paper").lower() == "paper"
-KELLY_FRACTION  = 0.20          # Conservative — structural edge only
-MAX_BET_USD     = 10.0
+KELLY_FRACTION  = 0.25          # Raised from 0.20 — more aggressive on proven structural edge
+MAX_BET_USD     = 20.0          # Raised from $10 — larger positions when Kelly calls for it
 TRADES_LOG_PATH = Path(os.getenv("TRADES_LOG", "/opt/apex/trades.log"))
-CASH_RESERVE_PCT = 0.25         # Keep 25% of bankroll as cash reserve (Change 6)
+CASH_RESERVE_PCT = 0.10         # Lowered from 25% to 10% — more aggressive deployment
 
 # Longshot zone: YES price in [10, 25] cents.
 # We skip the 5-9¢ range: at those extremes the market tends to be correct
@@ -59,7 +59,7 @@ CASH_RESERVE_PCT = 0.25         # Keep 25% of bankroll as cash reserve (Change 6
 # small probabilities. Extended to 25¢ to capture NBA playoff 1v8 / 2v7 seed
 # mismatches and any other market where the underdog is priced 21-25¢.
 LONGSHOT_LOW  = 10
-LONGSHOT_HIGH = 25
+LONGSHOT_HIGH = 30
 
 # Implied true probability adjustment — bias research shows 15¢ YES contracts
 # win ~8% of the time vs 15% implied. We model NO true prob = 0.90 (vs 0.85 implied).
@@ -68,12 +68,12 @@ BIAS_ADJUSTMENT = 0.05
 # Liquidity thresholds (Change 4)
 # Markets under 500 contracts are skipped entirely — too thin to move without
 # self-impact. Markets under 2000 get a $3 bet cap to limit slippage.
-MIN_VOLUME         = 500
-VOLUME_CAP_THRESH  = 2000
-LOW_LIQ_MAX_BET    = 3.0
+MIN_VOLUME         = 200     # lowered from 500 — more markets eligible
+VOLUME_CAP_THRESH  = 1000   # lowered from 2000
+LOW_LIQ_MAX_BET    = 5.0    # raised from $3
 
-MIN_HOURS      = 1.0
-MAX_HOURS      = 24.0
+MIN_HOURS      = 0.5    # 30 min minimum
+MAX_HOURS      = 48.0   # up to 2-day markets (some sports run overnight)
 
 # Fee-optimized price filter (Change 5): avoid NO bets where the NO price is 40-60¢.
 # Kalshi fees are highest (3-7%) in this mid-range band, eating structural edge.
@@ -320,7 +320,7 @@ def run_longshot_scan() -> list[dict]:
             our_probability=our_no_p,
             market_probability=market_no_p,
             kelly_fraction=KELLY_FRACTION,
-            max_pct=0.07,
+            max_pct=0.12,   # 12% of bankroll max per trade (up from 7%)
         )
         bet_usd = min(max(bet_usd, 1.0), MAX_BET_USD)
 

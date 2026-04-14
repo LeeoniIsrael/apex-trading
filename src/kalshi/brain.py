@@ -14,56 +14,55 @@ import anthropic
 
 logger = logging.getLogger(__name__)
 
-MIN_EDGE = 0.06  # 6% minimum edge — slightly relaxed to allow more political/world trades
+MIN_EDGE = 0.05  # 5% minimum edge — aggressive mode, maximise trade count
 MARKET_INTEL_PATH = Path(__file__).parent / "market_intel.json"
 
-# Change 3: Category guardrails.
-# BLOCKED_CATEGORIES: no algorithmic edge exists — skip without any Claude call.
-# PREFERRED_CATEGORIES: use for future scoring/prioritisation logic.
+# Only block crypto brackets — structural loss regardless of edge.
+# All other categories (sports, elections, world, entertainment, weather,
+# economics, culture, science) are now open for analysis.
 BLOCKED_CATEGORIES = frozenset({
     "crypto",         # price bracket structure makes systematic betting unprofitable
     "crypto_bracket", # explicit sub-type
-    "entertainment",  # no reliable signal for algorithmic trading
-    "culture",        # no reliable signal for algorithmic trading
 })
 PREFERRED_CATEGORIES = frozenset({
     "sports",
+    "politics",
+    "elections",
     "weather",
     "economics",
+    "world",
 })
 
-# Change 5: Fee-optimized price filter.
-# Kalshi fees are highest (3–7%) for contracts priced 43¢–57¢.
-# Narrowed from 40-60 to 43-57 to allow brain.py to engage with elections
-# and world markets typically priced near 40-43¢ or 57-60¢.
-FEE_TRAP_LOW  = 43
-FEE_TRAP_HIGH = 57
+# Fee trap removed — Claude is told to factor fees into its edge calculation
+# in the prompt. Blocking entire price bands was leaving too much on the table.
+FEE_TRAP_LOW  = 0
+FEE_TRAP_HIGH = 100
 
-SYSTEM_PROMPT = """You are APEX, an autonomous prediction market trading agent.
-Your job is to analyze Kalshi prediction market questions and determine if there is a
-genuine betting edge based on current evidence.
+SYSTEM_PROMPT = """You are APEX, an aggressive autonomous prediction market trading agent.
+Your job is to find EVERY possible edge on Kalshi and trade it. You cover all market types:
+elections, world events, politics, sports, economics, weather, science, entertainment.
 
-Always:
-1. Search for recent news about the specific market question
-2. Estimate the TRUE probability based on evidence found
-3. Compare to the MARKET IMPLIED probability (from price)
-4. Only recommend a trade if edge > 7%
-5. Be conservative — "SKIP" is always safe
+Rules:
+1. Use web_search to find the latest information on the specific question.
+2. Estimate the TRUE probability based on ALL available evidence.
+3. Edge = your_probability - market_implied_probability.
+4. Trade if |edge| > 5% AND confidence > 60%. Be willing to trade.
+5. Factor in Kalshi's ~2-4% fee when calculating net edge — if gross edge is 5-8%, net edge \
+   is positive as long as gross edge > fee. Do NOT skip a trade purely because of fees.
 
-Important: Research shows Kalshi has a favourite-longshot bias. Avoid recommending \
-bets under 25 cents (longshots lose more than implied). Prefer high-confidence markets \
-priced between 55-85 cents where the edge is most reliable. Only recommend BUY when \
-your estimated probability exceeds market price by at least 7%.
+Priority markets (high information value, trade aggressively):
+- Pope election (KXNEWPOPE): research leading cardinal candidates, betting markets, Vatican signals.
+- Political/elections: use latest polls, news, expert forecasts.
+- Economic data releases (CPI, jobs, Fed decisions): use analyst consensus and recent data.
+- Sports: research injuries, form, head-to-head. Fade heavy favorites — buy NO on underdogs \
+  priced 10-30¢ YES, they win less than implied.
+- World events (wars, treaties, disasters): use latest news.
+- Science/tech (SpaceX launches, AI milestones): use official announcements and expert sources.
 
-Prioritize markets that resolve within 24 hours. Crypto price markets, economic data \
-releases, and sports games all qualify. Spread bets across different categories — do \
-not place more than 3 bets in any single category per scan cycle.
-
-Sports markets: when a team is a heavy favourite (YES price 75¢ or higher), \
-prefer buying NO on the underdog outcome rather than YES on the favourite. \
-Heavy favourites are systematically overpriced on Kalshi — the NO side offers \
-better expected value. Only deviate from this if you find very strong specific \
-evidence (injury news, lineup changes) that confirms the favourite.
+Key biases to exploit:
+- Favourite-longshot bias: underdogs (YES < 25¢) are systematically overpriced.
+- Recency bias: markets often over-react to recent news, creating mean-reversion opportunities.
+- Underdog sports fade: buy NO on 10-30¢ YES teams — they win only ~half as often as implied.
 
 Return ONLY valid JSON, no markdown, no explanation outside the JSON.
 """
@@ -93,7 +92,7 @@ Return JSON with exactly these fields:
   "reasoning": "<1-2 sentence explanation>"
 }}
 
-Only return BUY_YES or BUY_NO if |edge| > 0.06 AND confidence > 0.6 AND market price is between 25-85 cents.
+Only return BUY_YES or BUY_NO if |edge| > 0.05 AND confidence > 0.6. Price range: any (1-99 cents).
 """
 
 
@@ -174,11 +173,6 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
         return _skip_result(f"HARD BLOCK — category [{category_raw}] blocked from trading")
 
     yes_price = KalshiClient.yes_price_cents(market)
-
-    # Change 5: Fee trap filter — avoid mid-range contracts where fees eat edge
-    if FEE_TRAP_LOW <= yes_price <= FEE_TRAP_HIGH:
-        logger.info("SKIP %s — mid-range fee trap (40-60¢) price=%d¢", ticker_raw, yes_price)
-        return _skip_result("mid-range fee trap (40-60¢)")
 
     no_price = 100 - yes_price
     title    = title_raw
@@ -313,7 +307,7 @@ def analyze_market(market: dict[str, Any]) -> dict[str, Any]:
         if edge < MIN_EDGE or confidence < 0.6:
             result["action"] = "SKIP"
             result["reasoning"] = (
-                f"Edge {edge:.1%} or confidence {confidence:.0%} below threshold (min edge 6%). "
+                f"Edge {edge:.1%} or confidence {confidence:.0%} below threshold (min 5%/60%). "
                 + result.get("reasoning", "")
             )
 

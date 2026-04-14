@@ -67,32 +67,30 @@ logger = logging.getLogger("apex_agent")
 TRADES_LOG        = Path(__file__).parent / "trades.log"
 DAILY_CALLS_LOG   = Path(__file__).parent / "daily_calls.json"
 DAILY_SNAPSHOTS   = Path("/opt/apex/daily_snapshots.json")  # Change 8
-DAILY_CLAUDE_BUDGET  = 30
+DAILY_CLAUDE_BUDGET  = 80          # 80 Claude calls/day — aggressive mode
 PAPER_MODE           = os.getenv("APEX_ENV", "paper").lower() == "paper"
 BANKROLL             = float(os.getenv("APEX_BANKROLL", "150.0"))
 KELLY_FRACTION       = float(os.getenv("KELLY_FRACTION", "0.35"))
-MAX_POSITION_PCT     = float(os.getenv("MAX_POSITION_PCT", "0.05"))
-MAX_POSITIONS        = 10
-MIN_VOLUME           = 100
-MIN_HOURS_TO_CLOSE   = 1.0   # at least 1 hour before close
-MAX_DAYS_TO_CLOSE    = 1     # same-day resolution only (within 24 hours)
+MAX_POSITION_PCT     = float(os.getenv("MAX_POSITION_PCT", "0.10"))  # 10% per position
+MAX_POSITIONS        = 20          # more concurrent open positions
+MIN_VOLUME           = 50          # lower volume floor — more markets eligible
+MIN_HOURS_TO_CLOSE   = 0.5         # 30 min minimum (catch late-breaking opportunities)
+MAX_DAYS_TO_CLOSE    = 7           # up to 7 days — enables elections, world events
 
-# Change 6: Cash reserve — never let cash drop below 25% of bankroll
-CASH_RESERVE_PCT     = 0.25
+# Cash reserve — 10% floor (down from 25%) — more aggressive deployment
+CASH_RESERVE_PCT     = 0.10
 
-# Change 7: Daily loss circuit breaker — if total deployed today exceeds this,
-# pause all new bets for the rest of the day and alert via Telegram.
-# Raised from $20 to $30 to allow more flexibility with NBA playoffs and elections.
-DAILY_LOSS_LIMIT_USD = 30.0
+# Daily circuit breaker — $75/day allows meaningful capital deployment
+DAILY_LOSS_LIMIT_USD = 75.0
 
-# Liquidity thresholds (Change 4) — mirrors longshot_fade.py
-MIN_VOLUME_HARD   = 500    # skip entirely below this
-VOL_CAP_THRESH    = 2000   # cap bet at $3 below this
-LOW_LIQ_MAX_BET   = 3.0
+# Liquidity thresholds
+MIN_VOLUME_HARD   = 100    # lowered from 500 — more markets eligible
+VOL_CAP_THRESH    = 1000   # cap at $5 below this
+LOW_LIQ_MAX_BET   = 5.0
 
-# Fee trap filter (Change 5) — avoid 43-57¢ mid-range contracts (narrowed from 40-60)
-FEE_TRAP_LOW  = 43
-FEE_TRAP_HIGH = 57
+# Fee trap removed — brain.py factors fees into its edge calculation
+FEE_TRAP_LOW  = 0
+FEE_TRAP_HIGH = 100
 
 
 def _get_client() -> KalshiClient:
@@ -283,12 +281,7 @@ def scan_markets() -> None:
                         ticker, hours_left / 24, MAX_DAYS_TO_CLOSE, close_time)
             continue
 
-        # Change 5: fee trap filter — brain.py handles this too, but filter early to save API calls
         yes_price = KalshiClient.yes_price_cents(market)
-        if FEE_TRAP_LOW <= yes_price <= FEE_TRAP_HIGH:
-            logger.info("SKIP %s — mid-range fee trap (40-60¢) price=%d¢", ticker, yes_price)
-            continue
-
         category = market.get("_event_category") or market.get("category", "unknown")
         logger.info("PASS %s — category=%s volume=%d hours_left=%.1fh → sending to brain",
                     ticker, category, volume, hours_left)
