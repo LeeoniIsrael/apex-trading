@@ -256,6 +256,38 @@ class KalshiClient:
 
         return self._post("/portfolio/orders", order)
 
+    def sell_position(
+        self,
+        ticker: str,
+        side: str,        # "yes" or "no" — the side you HOLD (not the exit side)
+        price_cents: int, # minimum acceptable sell price in cents
+        contracts: int,
+    ) -> dict:
+        """
+        Exit an open position by placing a sell limit order.
+        Kalshi uses action='sell' with the same side you hold.
+        """
+        order: dict = {
+            "ticker": ticker,
+            "side":   side.lower(),
+            "action": "sell",
+            "type":   "limit",
+            "count":  contracts,
+        }
+        if side.lower() == "yes":
+            order["yes_price"] = price_cents
+        else:
+            order["no_price"] = price_cents
+
+        if self.paper_mode:
+            logger.info(
+                "[PAPER] sell_position | ticker=%s side=%s price=%s¢ contracts=%s",
+                ticker, side, price_cents, contracts,
+            )
+            return {"order": {"order_id": f"PAPER-SELL-{int(time.time())}", "status": "resting"}}
+
+        return self._post("/portfolio/orders", order)
+
     def place_limit_order(
         self,
         ticker: str,

@@ -29,10 +29,12 @@ load_dotenv(Path(__file__).parent / ".env")
 
 import brain
 import btc_direction
+import crypto_scalper
 import feedback_loop
 import kelly as kelly_module
 import longshot_fade
 import market_intel
+import position_exit
 import sheets_logger
 import telegram_notify as tg
 import weather_strategy
@@ -576,6 +578,26 @@ if __name__ == "__main__":
         trigger=IntervalTrigger(minutes=15),
         id="longshot_fade",
         name="Longshot fade (structural bias)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # Crypto bracket scalper every 3 minutes — live BTC/ETH price signal
+    scheduler.add_job(
+        crypto_scalper.run_crypto_scalp,
+        trigger=IntervalTrigger(minutes=3),
+        id="crypto_scalp",
+        name="Crypto bracket scalper (live price)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # Position exit manager every 5 minutes — takes profits early, cuts losers
+    scheduler.add_job(
+        position_exit.run_position_exit,
+        trigger=IntervalTrigger(minutes=5),
+        id="position_exit",
+        name="Position exit manager (profit-taker)",
         replace_existing=True,
         max_instances=1,
     )
