@@ -45,6 +45,7 @@ load_dotenv(_HERE / ".env")
 load_dotenv(_APEX_DIR / ".env")
 
 import telegram_notify as tg
+from crypto_risk import crypto_compound_bet_usd
 from kalshi_client import KalshiClient
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,9 @@ logger = logging.getLogger(__name__)
 PAPER_MODE      = os.getenv("APEX_ENV", "paper").lower() == "paper"
 TRADES_LOG_PATH = Path(os.getenv("TRADES_LOG", "/opt/apex/trades.log"))
 
-MAX_BET_USD     = 5.0    # small positions — high turnover scalp
+BASE_BET_USD    = float(os.getenv("CRYPTO_BASE_BET_USD", "5.0"))
+CRYPTO_BET_MULTIPLIER = float(os.getenv("CRYPTO_BET_MULTIPLIER", "4.0"))
+MAX_BET_USD     = float(os.getenv("CRYPTO_MAX_BET_USD", "30.0"))
 MAX_POSITIONS   = 3      # max concurrent crypto scalp positions
 BUFFER_PCT      = 0.03   # require 3% price buffer from threshold for entry
 MIN_HOURS       = 0.5    # at least 30 min to close
@@ -142,6 +145,16 @@ def _log_trade(entry: dict) -> None:
             f.write(json.dumps(entry) + "\n")
     except Exception as e:
         logger.warning("trade log write failed: %s", e)
+
+
+def _crypto_compound_bet_usd(entry_cents: int, buffer_pct: float) -> float:
+    return crypto_compound_bet_usd(
+        entry_cents=entry_cents,
+        buffer_pct=buffer_pct,
+        base_bet_usd=BASE_BET_USD,
+        bet_multiplier=CRYPTO_BET_MULTIPLIER,
+        max_bet_usd=MAX_BET_USD,
+    )
 
 
 def run_crypto_scalp() -> list[dict]:
@@ -241,7 +254,8 @@ def run_crypto_scalp() -> list[dict]:
             )
             continue
 
-        contracts = max(1, int(MAX_BET_USD))
+        bet_usd = _crypto_compound_bet_usd(entry_cents=entry_cents, buffer_pct=buffer)
+        contracts = max(1, int(bet_usd / (entry_cents / 100)))
         cost_usd  = round(contracts * entry_cents / 100, 2)
 
         logger.info(

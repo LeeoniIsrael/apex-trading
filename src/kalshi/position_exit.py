@@ -13,9 +13,12 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+import requests
 
 _HERE = Path(__file__).parent
 _APEX_DIR = Path("/opt/apex")
@@ -28,6 +31,7 @@ load_dotenv(_HERE / ".env")
 load_dotenv(_APEX_DIR / ".env")
 
 import telegram_notify as tg
+from crypto_risk import should_exit_crypto
 from kalshi_client import KalshiClient
 
 logger = logging.getLogger(__name__)
@@ -38,6 +42,11 @@ TRADES_LOG_PATH = Path(os.getenv("TRADES_LOG", "/opt/apex/trades.log"))
 PROFIT_TARGET   = 0.12   # 12% gain from entry price → sell
 STOP_LOSS       = -0.15  # 15% loss from entry price → cut
 NEAR_EXPIRY_H   = 0.33   # < 20 min left → always sell
+CRYPTO_BREAK_EVEN_FLOOR = 0.0  # prefer break-even or better on crypto exits
+CRYPTO_DROP_EXIT_CENTS  = 50   # if odds drop below this after downside move, exit
+
+_COINGECKO_URL = "https://api.coingecko.com/api/v3/simple/price"
+_CRYPTO_RE = re.compile(r"^KX(BTC|ETH)-\d{2}[A-Z]{3}\d{4}-([BT])(\d+)$")
 
 
 def _load_open_trades() -> dict[str, dict]:
@@ -77,6 +86,56 @@ def _log_exit(entry: dict) -> None:
         logger.warning("exit log write failed: %s", e)
 
 
+def _get_live_prices() -> dict[str, float]:
+    """Fetch BTC/ETH spot prices for crypto-specific exit checks."""
+    try:
+        resp = requests.get(
+            _COINGECKO_URL,
+            params={"ids": "bitcoin,ethereum", "vs_currencies": "usd"},
+            timeout=8,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return {
+            "btc": float(data.get("bitcoin", {}).get("usd", 0)),
+            "eth": float(data.get("ethereum", {}).get("usd", 0)),
+        }
+    except Exception as e:
+        logger.warning("Position exit: CoinGecko price fetch failed: %s", e)
+        return {}
+
+
+def _crypto_asset_from_ticker(ticker: str) -> str | None:
+    m = _CRYPTO_RE.match(ticker)
+    if not m:
+        return None
+    return m.group(1).lower()
+
+
+def _should_exit_crypto(
+    direction: str,
+    profit_pct: float,
+    current_cents: int,
+    hours_left: float,
+    spot_now: float,
+    spot_entry: float,
+) -> tuple[bool, str]:
+    """Crypto exits: 12% take-profit, downside/sub-50 break-even exit, hard stop, near-expiry risk-off."""
+    return should_exit_crypto(
+        direction=direction,
+        profit_pct=profit_pct,
+        current_cents=current_cents,
+        hours_left=hours_left,
+        spot_now=spot_now,
+        spot_entry=spot_entry,
+        profit_target=PROFIT_TARGET,
+        stop_loss=STOP_LOSS,
+        break_even_floor=CRYPTO_BREAK_EVEN_FLOOR,
+        drop_exit_cents=CRYPTO_DROP_EXIT_CENTS,
+        near_expiry_hours=NEAR_EXPIRY_H,
+    )
+
+
 def run_position_exit() -> list[dict]:
     """
     Check all open Kalshi positions. Sell any that have hit the profit target,
@@ -101,6 +160,7 @@ def run_position_exit() -> list[dict]:
         return []
 
     open_trades = _load_open_trades()
+    live_prices = _get_live_prices()
     exits = []
 
     for pos in positions:
@@ -136,15 +196,28 @@ def run_position_exit() -> list[dict]:
         should_exit = False
         reason      = ""
 
-        if profit_pct >= PROFIT_TARGET:
-            should_exit = True
-            reason = f"profit target {profit_pct:.1%}"
-        elif profit_pct <= STOP_LOSS:
-            should_exit = True
-            reason = f"stop-loss {profit_pct:.1%}"
-        elif hours <= NEAR_EXPIRY_H:
-            should_exit = True
-            reason = f"near expiry ({hours*60:.0f} min left)"
+        crypto_asset = _crypto_asset_from_ticker(ticker)
+        if crypto_asset:
+            spot_now = live_prices.get(crypto_asset, 0.0)
+            spot_entry = float(trade.get("spot_at_entry", 0.0) or 0.0)
+            should_exit, reason = _should_exit_crypto(
+                direction=str(trade.get("direction", "above")),
+                profit_pct=profit_pct,
+                current_cents=current_cents,
+                hours_left=hours,
+                spot_now=spot_now,
+                spot_entry=spot_entry,
+            )
+        else:
+            if profit_pct >= PROFIT_TARGET:
+                should_exit = True
+                reason = f"profit target {profit_pct:.1%}"
+            elif profit_pct <= STOP_LOSS:
+                should_exit = True
+                reason = f"stop-loss {profit_pct:.1%}"
+            elif hours <= NEAR_EXPIRY_H:
+                should_exit = True
+                reason = f"near expiry ({hours*60:.0f} min left)"
 
         if not should_exit:
             logger.debug(

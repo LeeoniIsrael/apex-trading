@@ -589,10 +589,10 @@ if __name__ == "__main__":
         max_instances=1,
     )
 
-    # Crypto bracket scalper every 3 minutes — live BTC/ETH price signal
+    # Crypto bracket scalper every minute — live BTC/ETH price signal
     scheduler.add_job(
         crypto_scalper.run_crypto_scalp,
-        trigger=IntervalTrigger(minutes=3),
+        trigger=IntervalTrigger(minutes=1),
         id="crypto_scalp",
         name="Crypto bracket scalper (live price)",
         replace_existing=True,
