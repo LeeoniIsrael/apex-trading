@@ -1,11 +1,21 @@
 """
-APEX Feedback Loop — learns from settled Kalshi positions.
+APEX Feedback Loop — learns from settled Kalshi markets.
 
 Every hour:
-  1. Fetch settled positions from Kalshi API.
-  2. Append any new ones to /opt/apex/learning_log.json.
-  3. Expose get_edge_calibration() so brain.py can inject real
+  1. Read trades.log for all tickers we traded.
+  2. For each unseen ticker, fetch the market from Kalshi API.
+  3. If the market has a result ("yes" or "no"), calculate our P&L
+     from our own trade data (side, price_cents, contracts).
+  4. Append new entries to /opt/apex/learning_log.json.
+  5. Expose get_edge_calibration() so brain.py can inject real
      historical win rates into each Claude prompt.
+
+Why this approach:
+  Kalshi's /portfolio/positions endpoint returns realized_pnl=0 for
+  settled positions and clears the position quantity after settlement,
+  making it impossible to determine side or profit. Instead, we own
+  the trade data in trades.log and only need the market result from
+  the API to compute accurate P&L.
 """
 import json
 import logging
@@ -29,7 +39,8 @@ from kalshi_client import KalshiClient
 logger = logging.getLogger(__name__)
 
 LEARNING_LOG_PATH = Path(os.getenv("LEARNING_LOG", "/opt/apex/learning_log.json"))
-PAPER_MODE = os.getenv("APEX_ENV", "paper").lower() == "paper"
+TRADES_LOG_PATH   = Path(os.getenv("TRADES_LOG",   "/opt/apex/trades.log"))
+PAPER_MODE        = os.getenv("APEX_ENV", "paper").lower() == "paper"
 
 _CRYPTO_KW  = ("btc", "bitcoin", "eth", "ethereum", "crypto", "kxbtc", "kxeth",
                "solana", "sol", "doge", "xrp")
@@ -65,9 +76,44 @@ def _save_log(entries: list[dict]) -> None:
         logger.warning("Could not write learning_log.json: %s", e)
 
 
+def _load_trades() -> list[dict]:
+    """Read trades.log; return only entries that have the 'strategy' key."""
+    if not TRADES_LOG_PATH.exists():
+        return []
+    trades = []
+    try:
+        for line in TRADES_LOG_PATH.read_text().splitlines():
+            try:
+                t = json.loads(line)
+                if "strategy" in t and "ticker" in t:
+                    trades.append(t)
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning("Could not read trades.log: %s", e)
+    return trades
+
+
+def _fetch_market_result(client: KalshiClient, ticker: str) -> str | None:
+    """
+    Return the market result ("yes" or "no") if the market has settled,
+    or None if it is still open or the result field is absent.
+    """
+    try:
+        data = client._get(f"/markets/{ticker}")
+        market = data.get("market", data)
+        result = market.get("result", "")
+        if result and result.lower() in ("yes", "no"):
+            return result.lower()
+    except Exception as e:
+        logger.debug("Could not fetch market %s: %s", ticker, e)
+    return None
+
+
 def run_feedback_loop() -> int:
     """
-    Fetch settled positions from Kalshi, append new ones to learning_log.json.
+    Cross-reference trades.log with Kalshi market results.
+    For every settled market we traded, record the outcome and P&L.
     Returns number of new entries added.
     """
     logger.info("── Feedback loop starting ──")
@@ -82,84 +128,76 @@ def run_feedback_loop() -> int:
         logger.warning("Feedback loop: Kalshi client init failed: %s", e)
         return 0
 
-    # Fetch settled positions — try settlement_status param first, fall back
-    try:
-        data = client._get("/portfolio/positions",
-                           params={"settlement_status": "settled", "limit": 200})
-        positions = data.get("market_positions", [])
-        # If no results with filter, retry without and filter locally
-        if not positions:
-            data = client._get("/portfolio/positions", params={"limit": 200})
-            positions = [
-                p for p in data.get("market_positions", [])
-                if str(p.get("settlement_status", "")).lower() == "settled"
-            ]
-    except Exception as e:
-        logger.warning("Feedback loop: positions fetch failed: %s", e)
+    trades = _load_trades()
+    if not trades:
+        logger.info("Feedback loop: no trades found in trades.log.")
         return 0
 
-    if not positions:
-        logger.info("Feedback loop: no settled positions found.")
-        return 0
-
-    existing = _load_log()
+    existing     = _load_log()
     seen_tickers = {e["ticker"] for e in existing}
 
-    new_entries = []
-    for pos in positions:
-        ticker = pos.get("ticker", "")
-        if not ticker or ticker in seen_tickers:
+    # Deduplicate trades by ticker — keep the last entry per ticker
+    # (in case a market was traded more than once on different days)
+    by_ticker: dict[str, dict] = {}
+    for t in trades:
+        by_ticker[t["ticker"]] = t
+
+    new_entries: list[dict] = []
+    checked = 0
+
+    for ticker, trade in by_ticker.items():
+        if ticker in seen_tickers:
             continue
 
-        # Determine side: the position field is net contracts;
-        # positive = YES held, negative = NO held
-        position_qty = int(pos.get("position", 0) or 0)
-        side = "yes" if position_qty >= 0 else "no"
+        result = _fetch_market_result(client, ticker)
+        if result is None:
+            # Market still open or result unavailable — skip for now
+            continue
 
-        # Entry price: use average trade price if available
-        avg_price = pos.get("average_trade_price") or pos.get("last_price_dollars")
-        try:
-            price_cents = round(float(avg_price) * 100) if avg_price is not None else 50
-        except (ValueError, TypeError):
-            price_cents = 50
+        checked += 1
+        side        = trade.get("side", "yes").lower()
+        price_cents = int(trade.get("price_cents", 50))
+        contracts   = int(trade.get("contracts", 1))
+        title       = trade.get("title", "")
+        category    = _infer_category(ticker, title)
 
-        # P&L: Kalshi returns realized_pnl in cents
-        raw_pnl = pos.get("realized_pnl") or pos.get("pnl") or 0
-        try:
-            profit_usd = round(float(raw_pnl) / 100, 2)
-        except (ValueError, TypeError):
-            profit_usd = 0.0
+        # Determine outcome: our side matches the resolved result
+        won = (side == result)
 
-        outcome = "won" if profit_usd > 0 else "lost"
-
-        title = pos.get("market_title") or pos.get("title") or ""
-        category = _infer_category(ticker, title)
-
-        settled_date = (pos.get("settlement_time") or pos.get("close_time")
-                        or datetime.now(timezone.utc).isoformat())
+        if won:
+            profit_usd = round(contracts * (100 - price_cents) / 100, 2)
+            outcome    = "won"
+        else:
+            profit_usd = round(-contracts * price_cents / 100, 2)
+            outcome    = "lost"
 
         entry = {
             "ticker":               ticker,
             "side":                 side,
             "price_cents_at_entry": price_cents,
+            "contracts":            contracts,
+            "result":               result,
             "outcome":              outcome,
             "profit_usd":           profit_usd,
             "market_category":      category,
-            "date":                 settled_date,
+            "strategy":             trade.get("strategy", "unknown"),
+            "date":                 trade.get("date", datetime.now(timezone.utc).isoformat()),
         }
         new_entries.append(entry)
         seen_tickers.add(ticker)
         logger.info(
-            "LEARN %s | %s %s | %s | profit=$%.2f | cat=%s",
-            ticker, side, price_cents, outcome, profit_usd, category,
+            "LEARN %s | side=%s price=%d¢ ×%d | result=%s | %s | P&L=$%+.2f | cat=%s",
+            ticker, side, price_cents, contracts, result, outcome, profit_usd, category,
         )
 
     if new_entries:
         _save_log(existing + new_entries)
-        logger.info("Feedback loop: added %d new entries (total=%d)",
-                    len(new_entries), len(existing) + len(new_entries))
+        logger.info(
+            "Feedback loop: checked=%d new=%d (total=%d)",
+            checked, len(new_entries), len(existing) + len(new_entries),
+        )
     else:
-        logger.info("Feedback loop: 0 new entries (all already logged).")
+        logger.info("Feedback loop: 0 new settled markets found (checked %d).", checked)
 
     return len(new_entries)
 
@@ -167,7 +205,7 @@ def run_feedback_loop() -> int:
 def get_edge_calibration() -> str:
     """
     Read learning_log.json and return a plain-English calibration string
-    suitable for injection into the brain.py system prompt.
+    for injection into the brain.py system prompt.
 
     Returns empty string if fewer than 5 settled bets exist (not enough signal).
     """
@@ -175,21 +213,28 @@ def get_edge_calibration() -> str:
     if len(entries) < 5:
         return ""
 
-    # Bucket by category+side
+    # Bucket by category + side
     buckets: dict[str, dict] = {}
     for e in entries:
         key = f"{e.get('market_category', 'other')} {e.get('side', '?')}-side"
         if key not in buckets:
-            buckets[key] = {"bets": 0, "wins": 0}
+            buckets[key] = {"bets": 0, "wins": 0, "pnl": 0.0}
         buckets[key]["bets"] += 1
         if e.get("outcome") == "won":
             buckets[key]["wins"] += 1
+        buckets[key]["pnl"] += float(e.get("profit_usd", 0))
 
-    lines = [f"Historical performance (from {len(entries)} settled bets):"]
+    total_pnl = sum(b["pnl"] for b in buckets.values())
+    lines = [
+        f"Historical performance (from {len(entries)} settled bets, total P&L=${total_pnl:+.2f}):"
+    ]
     for key, stats in sorted(buckets.items()):
-        bets = stats["bets"]
-        wins = stats["wins"]
+        bets    = stats["bets"]
+        wins    = stats["wins"]
         win_pct = wins / bets * 100 if bets else 0
-        lines.append(f"- {key}: {bets} bets, {wins} wins, {win_pct:.0f}% win rate")
+        pnl     = stats["pnl"]
+        lines.append(
+            f"- {key}: {bets} bets, {wins} wins ({win_pct:.0f}% win rate), P&L=${pnl:+.2f}"
+        )
 
     return "\n".join(lines)
