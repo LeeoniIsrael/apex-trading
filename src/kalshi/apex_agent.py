@@ -59,15 +59,14 @@ logging.basicConfig(
         logging.FileHandler(Path(__file__).parent / "apex.log"),
     ],
 )
-# Enable DEBUG on kalshi_client so auth header details are visible
-logging.getLogger("kalshi_client").setLevel(logging.DEBUG)
+logging.getLogger("kalshi_client").setLevel(logging.WARNING)
 logger = logging.getLogger("apex_agent")
 
 # ── Config ────────────────────────────────────────────────────────────────────
 TRADES_LOG        = Path(__file__).parent / "trades.log"
 DAILY_CALLS_LOG   = Path(__file__).parent / "daily_calls.json"
 DAILY_SNAPSHOTS   = Path("/opt/apex/daily_snapshots.json")  # Change 8
-DAILY_CLAUDE_BUDGET  = 80          # 80 Claude calls/day — aggressive mode
+DAILY_CLAUDE_BUDGET  = 20          # 20 Claude calls/day — protects $5 credits (~50 days)
 PAPER_MODE           = os.getenv("APEX_ENV", "paper").lower() == "paper"
 BANKROLL             = float(os.getenv("APEX_BANKROLL", "150.0"))
 KELLY_FRACTION       = float(os.getenv("KELLY_FRACTION", "0.35"))
@@ -282,6 +281,13 @@ def scan_markets() -> None:
             continue
 
         yes_price = KalshiClient.yes_price_cents(market)
+
+        # Skip longshot zone — longshot_fade.py already scans YES 10-30¢ markets
+        # algorithmically every 15 min with no Claude cost. Don't double-spend.
+        if 10 <= yes_price <= 30:
+            logger.info("SKIP %s — YES=%d¢ in longshot zone, covered by longshot_fade", ticker, yes_price)
+            continue
+
         category = market.get("_event_category") or market.get("category", "unknown")
         logger.info("PASS %s — category=%s volume=%d hours_left=%.1fh → sending to brain",
                     ticker, category, volume, hours_left)
@@ -564,10 +570,10 @@ if __name__ == "__main__":
         max_instances=1,
     )
 
-    # Longshot fade every 30 minutes
+    # Longshot fade every 15 minutes (doubled frequency, zero API cost)
     scheduler.add_job(
         longshot_fade.run_longshot_scan,
-        trigger=IntervalTrigger(minutes=30),
+        trigger=IntervalTrigger(minutes=15),
         id="longshot_fade",
         name="Longshot fade (structural bias)",
         replace_existing=True,
