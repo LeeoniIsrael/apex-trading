@@ -273,11 +273,11 @@ def run_crypto_scalp() -> list[dict]:
         cost_usd  = round(contracts * entry_cents / 100, 2)
 
         logger.info(
-            "CRYPTO SCALP %s — %s $%,.0f %s $%,.0f (%.1f%% buffer) "
+            "CRYPTO SCALP %s — %s $%s %s $%s (%.1f%% buffer) "
             "| BUY YES ×%d @%d¢ cost=$%.2f | %.1fh left",
-            ticker, asset.upper(), spot,
+            ticker, asset.upper(), f"{spot:,.0f}",
             ">" if direction == "above" else "<",
-            threshold, buffer * 100,
+            f"{threshold:,.0f}", buffer * 100,
             contracts, entry_cents, cost_usd, hours,
         )
 
