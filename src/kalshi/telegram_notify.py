@@ -131,52 +131,62 @@ async def send_trade_alert(
     edge_pct: float,
     reasoning: str,
 ) -> bool:
+    clean_title = market_title.replace(" Winner?", "").replace(" winner?", "")[:60]
+    direction = "WON'T happen" if side.upper() == "NO" else "WILL happen"
     mode = os.getenv("APEX_ENV", "paper").upper()
-    yes_price = None  # price_cents not passed here; edge_pct used instead
+    prefix = "[paper] " if mode == "PAPER" else ""
     return await _send(
-        f"*[{mode}] Found something.*\n"
-        f"`{market_title}` — {side.upper()} at edge `{edge_pct:.1f}%`. "
-        f"Sizing: `${amount_usd:.2f}`.\n"
-        f"_{reasoning[:200]}_"
+        f"{prefix}Just placed a bet!\n"
+        f"*{clean_title}*\n"
+        f"We bet ${amount_usd:.2f} that this {direction}. Waiting to see how it plays out."
     )
 
 
-async def send_trade_win(market_title: str, pnl: float) -> bool:
-    return await _send(f"That one paid. `+${pnl:.2f}` on `{market_title}`.")
+async def send_trade_win(market_title: str, pnl: float, cost_usd: float = 0.0) -> bool:
+    clean_title = market_title.replace(" Winner?", "").replace(" winner?", "")[:60]
+    collected = round(cost_usd + pnl, 2) if cost_usd else pnl
+    if cost_usd:
+        return await _send(
+            f"We won one! {clean_title} came through.\n"
+            f"Bet ${cost_usd:.2f}, got back ${collected:.2f} — profit +${pnl:.2f}"
+        )
+    return await _send(f"We won one! Profit +${pnl:.2f} on {clean_title}.")
 
 
-async def send_trade_loss(market_title: str, pnl: float) -> bool:
+async def send_trade_loss(market_title: str, pnl: float, cost_usd: float = 0.0) -> bool:
+    clean_title = market_title.replace(" Winner?", "").replace(" winner?", "")[:60]
     return await _send(
-        f"Took the loss. `-${abs(pnl):.2f}` on `{market_title}`. "
-        f"Still within drawdown limits."
+        f"That one didn't work out. Lost ${abs(pnl):.2f} on {clean_title}. "
+        f"Happens — moving on."
     )
 
 
 async def send_daily_summary(
     pnl: float, trades: int, win_rate: float, bankroll: float, day: int = 0
 ) -> bool:
-    day_str = f"Day {day}. " if day else ""
     if pnl >= 0:
         return await _send(
-            f"{day_str}Up `${pnl:.2f}`. Win rate: `{win_rate:.0%}`. "
-            f"`{trades}` trades placed."
+            f"Good morning! We're up ${pnl:.2f} overall. "
+            f"Placed {trades} bets, won {win_rate:.0%} of them. "
+            f"Balance: ${bankroll:.2f}. Let's keep it going."
         )
     else:
         return await _send(
-            f"{day_str}Down `${abs(pnl):.2f}`. Win rate: `{win_rate:.0%}`. "
-            f"Adjusting filters tomorrow."
+            f"Good morning. Down ${abs(pnl):.2f} overall right now. "
+            f"Placed {trades} bets. Balance: ${bankroll:.2f}. "
+            f"Staying patient and sticking to the plan."
         )
 
 
 async def send_error(error_msg: str) -> bool:
-    return await _send(f"Something broke. Checking it now.\n`{error_msg[:300]}`")
+    return await _send(f"Something broke on my end. Looking into it.\n`{error_msg[:300]}`")
 
 
 async def send_startup(balance: float, mode: str) -> bool:
+    mode_note = " (paper mode — no real money)" if mode.upper() == "PAPER" else ""
     return await _send(
-        f"*Little Lio Trader*\n"
-        f"Online. `{mode.upper()}` mode. Balance `${balance:.2f}`. "
-        f"Scanning Kalshi markets every 15 minutes."
+        f"Little Lio Trader is online{mode_note}.\n"
+        f"Balance: ${balance:.2f}. Scanning for bets every few minutes."
     )
 
 
@@ -227,72 +237,74 @@ async def _cmd_start(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> 
     )
 
 
-@_guarded
-async def _cmd_status(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+def _get_today_summary() -> str:
     """
-    Change 9: Full status report — balance, resting orders, positions,
-    today's P&L vs yesterday, active strategies, last scan time.
-    Entire body wrapped in try/except so any failure surfaces to Telegram.
+    Simple today-only summary: balance, bets placed/won/lost/waiting.
+    Called by /status and the natural language 'what's new' route.
     """
+    today_iso = datetime.now(timezone.utc).date().isoformat()
+
+    # Fetch live balance
+    balance_str = "couldn't fetch"
     try:
-        # ── Kalshi live data ───────────────────────────────────────────────────
-        client   = _make_kalshi_client()
+        client  = _make_kalshi_client()
         bal_data = client.get_balance()
         balance  = bal_data.get("balance", 0) / 100
-        positions = client.get_positions()
-        open_pos  = [p for p in positions if p.get("total_traded", 0) > 0]
-        n_pos     = len(open_pos)
+        balance_str = f"${balance:.2f}"
+    except Exception:
+        pass
 
-        # Resting orders: trades.log entries from today without a settled result
-        resting_count = 0
-        today_iso = datetime.now(timezone.utc).date().isoformat()
-        if TRADES_LOG.exists():
-            for line in TRADES_LOG.read_text().splitlines():
-                try:
-                    t = json.loads(line)
-                    if t.get("date", "").startswith(today_iso) and not t.get("result"):
-                        resting_count += 1
-                except Exception:
-                    pass
+    # Read today's entries from trades.log
+    buys_today: list[dict] = []
+    exits_today: list[dict] = []
 
-        # ── Daily P&L from snapshots ───────────────────────────────────────────
-        pnl_str = "P&L: no snapshot yet"
-        if DAILY_SNAPSHOTS.exists():
-            snaps = json.loads(DAILY_SNAPSHOTS.read_text())
-            from datetime import date, timedelta
-            yesterday_iso = (date.today() - timedelta(days=1)).isoformat()
-            yval = snaps.get(yesterday_iso)
-            if yval is not None:
-                change = balance - yval
-                sign = "+" if change >= 0 else ""
-                pnl_str = f"vs yesterday: {sign}${change:.2f} (was ${yval:.2f})"
+    if TRADES_LOG.exists():
+        for line in TRADES_LOG.read_text().splitlines():
+            try:
+                t = json.loads(line)
+                if not t.get("date", "").startswith(today_iso):
+                    continue
+                if t.get("action") == "sell":
+                    exits_today.append(t)
+                else:
+                    buys_today.append(t)
+            except Exception:
+                pass
 
-        # ── Shared status data (set by apex_agent at each scan) ───────────────
-        strategies = _status_data.get("active_strategies", ["brain", "longshot", "weather"])
-        last_scan  = _status_data.get("last_scan", "not yet")
-        if last_scan != "not yet":
-            ls = datetime.fromisoformat(last_scan)
-            mins_ago = int((datetime.now(timezone.utc) - ls).total_seconds() / 60)
-            last_scan = f"{mins_ago}m ago"
+    placed = len(buys_today)
+    won    = sum(1 for e in exits_today if float(e.get("profit_usd", 0)) > 0)
+    lost   = sum(1 for e in exits_today if float(e.get("profit_usd", 0)) < 0)
+    total_profit = sum(float(e.get("profit_usd", 0)) for e in exits_today)
 
-        paused      = PAUSE_FLAG.exists()
-        mode        = os.getenv("APEX_ENV", "paper").upper()
-        status_icon = "PAUSED" if paused else mode
+    exited_tickers = {e.get("ticker", "") for e in exits_today}
+    waiting = sum(1 for b in buys_today if b.get("ticker", "") not in exited_tickers)
 
-        # Note: avoid [ ] in Markdown mode — Telegram treats them as link syntax
-        lines = [
-            f"*APEX — {status_icon}*",
-            f"Balance: `${balance:.2f}` | {pnl_str}",
-            f"Open positions: `{n_pos}` | Resting orders today: `{resting_count}`",
-            f"Active strategies: {', '.join(strategies)}",
-            f"Last scan: {last_scan}",
-        ]
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    profit_sign = "+" if total_profit >= 0 else ""
 
+    lines = [
+        f"Here's where we're at today:",
+        f"Balance: {balance_str}",
+        f"Bets placed today: {placed}",
+    ]
+    if exits_today:
+        lines.append(f"Won: {won}  |  Lost: {lost}  |  Still waiting: {waiting}")
+        lines.append(f"Profit today: {profit_sign}${total_profit:.2f}")
+    elif placed > 0:
+        lines.append(f"Still waiting on {waiting} bet{'s' if waiting != 1 else ''} to resolve.")
+    else:
+        lines.append("No bets placed yet today.")
+
+    return "\n".join(lines)
+
+
+@_guarded
+async def _cmd_status(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    try:
+        summary = _get_today_summary()
+        await update.message.reply_text(summary)
     except Exception as e:
         logger.error("_cmd_status failed: %s", e)
-        # No parse_mode on the error reply — e may contain characters that break Markdown
-        await update.message.reply_text(f"Status error: {e}")
+        await update.message.reply_text(f"Couldn't get status right now: {e}")
 
 
 @_guarded
@@ -475,12 +487,26 @@ async def _cmd_help(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> N
 
 @_guarded
 async def _handle_message(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
-    """Smart Q&A: call Claude Haiku with trade context."""
+    """Smart Q&A: route common questions locally, fall back to Claude Haiku."""
     raw  = update.message.text or ""
     text = _sanitize(raw)
 
     if _BLOCKED_RE.search(text):
         await update.message.reply_text("Not sure what you mean. Try /help.")
+        return
+
+    # Route "what's new / status / how are we doing" to simple today summary — no Claude needed
+    _UPDATE_RE = re.compile(
+        r"\b(what.{0,15}(new|up|going on|happening|update|s new)|"
+        r"how.{0,15}(we doing|are we|going|s it going)|"
+        r"give.{0,10}(update|summary|rundown)|"
+        r"any.{0,10}(update|news|bets)|"
+        r"^(status|update|summary|sup|wassup|what up)$)\b",
+        re.IGNORECASE,
+    )
+    if _UPDATE_RE.search(text):
+        summary = _get_today_summary()
+        await update.message.reply_text(summary)
         return
 
     # Route trade-listing questions directly to get_trades_summary() — no Claude needed

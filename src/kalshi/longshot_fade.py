@@ -397,9 +397,9 @@ def run_longshot_scan() -> list[dict]:
 
         clean_title = title.replace(" Winner?", "").replace(" winner?", "")
         msg = (
-            f"*LONGSHOT FADE:* {clean_title} — "
-            f"bet ${cost_usd:.2f} on NO at {limit_price}¢, "
-            f"payout ${payout:.2f} if wins, profit +${profit:.2f}"
+            f"Just placed a bet on {clean_title}! "
+            f"We bet ${cost_usd:.2f} that this WON'T happen. "
+            f"If we're right → profit +${profit:.2f}"
         )
         logger.info(msg.replace("*", ""))
         asyncio.run(tg.send_message(msg))

@@ -34,9 +34,11 @@ import feedback_loop
 import kelly as kelly_module
 import longshot_fade
 import market_intel
+import parlay_engine
 import position_exit
 import sheets_logger
 import telegram_notify as tg
+import weather_arb
 import weather_strategy
 from kalshi_client import KalshiClient
 
@@ -506,9 +508,22 @@ def morning_briefing() -> None:
     # Persist today's snapshot
     _save_snapshot(today, portfolio_value)
 
+    if yesterday_val is not None:
+        change = portfolio_value - yesterday_val
+        change_word = f"up ${change:.2f}" if change >= 0 else f"down ${abs(change):.2f}"
+        balance_note = f"Balance: ${portfolio_value:.2f} ({change_word} from yesterday)"
+    else:
+        balance_note = f"Balance: ${portfolio_value:.2f}"
+
+    pos_note = (f"{n_positions} bet{'s' if n_positions != 1 else ''} still running"
+                if n_positions else "no open bets right now")
+
     msg = (
-        f"Good morning. Portfolio: ${portfolio_value:.2f} ({change_str}). "
-        f"Active positions: {n_positions}. Bot running."
+        f"Good morning! Here's your daily update.\n"
+        f"{balance_note}\n"
+        f"Active bets: {pos_note}\n"
+        f"The bot is live and scanning for opportunities every few minutes. "
+        f"You'll get a message whenever we place a new bet."
     )
     logger.info(msg)
     asyncio.run(tg.send_message(msg))
@@ -587,6 +602,16 @@ if __name__ == "__main__":
             max_instances=1,
         )
 
+    # Weather arb — spread + ultra-low bracket, every 90 seconds
+    scheduler.add_job(
+        weather_arb.run_weather_arb,
+        trigger=IntervalTrigger(seconds=90),
+        id="weather_arb",
+        name="Weather spread arb + ultra-low brackets",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     # Weather strategy every 6 hours (aligned with GFS model updates: 00Z/06Z/12Z/18Z)
     scheduler.add_job(
         weather_strategy.run_weather_scan,
@@ -647,6 +672,16 @@ if __name__ == "__main__":
         max_instances=1,
     )
 
+    # Parlay engine -- 2-leg NBA + crypto combo at 5pm ET
+    scheduler.add_job(
+        parlay_engine.run_parlay,
+        trigger=CronTrigger(hour=17, minute=0, timezone="America/New_York"),
+        id="parlay_engine",
+        name="Parlay engine (2-leg NBA+crypto combo)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     # Morning briefing at 9am ET
     scheduler.add_job(
         morning_briefing,
@@ -671,6 +706,7 @@ if __name__ == "__main__":
     if _HAS_NEGRISK:
         negrisk_scanner.run_negrisk_scan()
     weather_strategy.run_weather_scan()
+    weather_arb.run_weather_arb()
     longshot_fade.run_longshot_scan()
     scan_markets()
 

@@ -259,12 +259,18 @@ def run_position_exit() -> list[dict]:
         exits.append(exit_entry)
         _log_exit(exit_entry)
 
-        sign = "+" if profit_usd >= 0 else ""
-        msg = (
-            f"*PROFIT TAKEN:* {ticker} {side.upper()} — "
-            f"entry {entry_cents}¢ → exit {sell_price}¢ "
-            f"×{contracts} = ${sign}{profit_usd:.2f} ({profit_pct:.1%}) [{reason}]"
-        )
+        cost_usd_entry = round(contracts * entry_cents / 100, 2)
+        if profit_usd >= 0:
+            collected = round(cost_usd_entry + profit_usd, 2)
+            msg = (
+                f"We won one! Cashed out on {ticker}.\n"
+                f"Bet ${cost_usd_entry:.2f}, got back ${collected:.2f} — profit +${profit_usd:.2f}"
+            )
+        else:
+            msg = (
+                f"That one didn't work out. Cut our losses on {ticker}. "
+                f"Lost ${abs(profit_usd):.2f}. Moving on."
+            )
         logger.info(msg.replace("*", ""))
         asyncio.run(tg.send_message(msg))
 

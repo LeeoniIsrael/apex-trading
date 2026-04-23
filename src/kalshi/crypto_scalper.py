@@ -181,7 +181,7 @@ def run_crypto_scalp() -> list[dict]:
 
     btc = prices["btc"]
     eth = prices["eth"]
-    logger.info("Spot prices — BTC=$%,.0f  ETH=$%,.0f", btc, eth)
+    logger.info("Spot prices — BTC=$%s  ETH=$%s", f"{btc:,.0f}", f"{eth:,.0f}")
 
     try:
         client = KalshiClient(
@@ -313,12 +313,14 @@ def run_crypto_scalp() -> list[dict]:
         orders.append(entry)
         _log_trade(entry)
 
-        symbol = ">" if direction == "above" else "<"
+        direction_word = "above" if direction == "above" else "below"
+        payout_usd = round(contracts * 1.00, 2)
+        profit_usd = round(payout_usd - cost_usd, 2)
         msg = (
-            f"*CRYPTO SCALP:* {ticker}\n"
-            f"{asset.upper()} ${spot:,.0f} {symbol} ${threshold:,.0f} "
-            f"({buffer:.1%} buffer) — {hours:.1f}h to close\n"
-            f"BUY YES ×{contracts} @ {entry_cents}¢  cost ${cost_usd:.2f}"
+            f"Just placed a crypto bet!\n"
+            f"{asset.upper()} is ${spot:,.0f} right now — clearly {direction_word} the ${threshold:,.0f} mark. "
+            f"We bet ${cost_usd:.2f} that it stays that way. "
+            f"If we're right in the next {hours:.1f}h → profit +${profit_usd:.2f}"
         )
         asyncio.run(tg.send_message(msg))
 
