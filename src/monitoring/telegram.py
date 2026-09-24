@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime, time, timedelta, timezone
 
@@ -143,6 +144,63 @@ class TelegramController:
         return "Commands: /status /pnl /today /positions /weather /health /costs /model /calibration /pause /resume /emergency_stop"
 
 
+class ConversationAssistant:
+    """Small, read-only natural-language layer over the live trading database."""
+
+    def __init__(self, database: Database, api_key: str, bankroll: float) -> None:
+        from openai import OpenAI
+        self.database = database
+        self.client = OpenAI(api_key=api_key, timeout=12, max_retries=1)
+        self.bankroll = bankroll
+        self.model = os.getenv("TELEGRAM_CHAT_MODEL", "gpt-6-luna")
+        self.daily_cap = float(os.getenv("TELEGRAM_CHAT_DAILY_USD", "0.05"))
+        self.monthly_cap = float(os.getenv("TELEGRAM_CHAT_MONTHLY_USD", "1.00"))
+
+    def _snapshot(self) -> str:
+        now = datetime.now(timezone.utc)
+        today = now.date().isoformat()
+        with self.database.connect() as connection:
+            orders = int(connection.execute(
+                "SELECT COUNT(*) FROM orders WHERE created_at LIKE ? AND filled_contracts>0", (f"{today}%",)
+            ).fetchone()[0])
+            open_count, exposure = connection.execute(
+                "SELECT COUNT(*),COALESCE(SUM(contracts*average_price_cents/100.0),0) FROM positions WHERE contracts>0"
+            ).fetchone()
+            realized = float(connection.execute(
+                "SELECT COALESCE(SUM(realized_pnl_usd),0) FROM positions WHERE contracts=0"
+            ).fetchone()[0])
+            latest = connection.execute(
+                "SELECT ticker,side,contracts,average_price_cents FROM positions WHERE contracts>0 ORDER BY updated_at DESC LIMIT 5"
+            ).fetchall()
+        positions = [f"{r['ticker']} {r['side']} x{r['contracts']} at {r['average_price_cents']:.1f}c" for r in latest]
+        return (f"UTC={now.isoformat()}; mode=paper; bankroll=${self.bankroll:.2f}; "
+                f"filled_trades_today={orders}; open_positions={open_count}; exposure=${float(exposure):.2f}; "
+                f"realized_pnl_all_time=${realized:.2f}; latest_positions={positions}")
+
+    def answer(self, question: str) -> str:
+        tracker = CostTracker(self.database)
+        reserve = 0.002
+        if not tracker.can_spend("other_api", reserve, daily_limit=self.daily_cap, monthly_limit=self.monthly_cap):
+            return "Chat budget is reached for now. Try /today for the live numbers."
+        response = self.client.responses.create(
+            model=self.model, reasoning={"effort": "none"},
+            input=[
+                {"role": "system", "content": (
+                    "You are the user's private paper-trading status assistant. Answer only from the supplied "
+                    "live snapshot. Be warm, direct, and under 70 words. Use plain English, not trading jargon. "
+                    "Never claim a paper trade is real money, never predict returns, never invent data, and never "
+                    "offer to place/change trades. If the snapshot cannot answer, say so simply."
+                )},
+                {"role": "user", "content": f"Live snapshot: {self._snapshot()}\n\nUser: {question}"},
+            ],
+        )
+        usage = response.usage
+        cost = ((int(getattr(usage, "input_tokens", 0) or 0) * 0.10) +
+                (int(getattr(usage, "output_tokens", 0) or 0) * 0.50)) / 1_000_000
+        tracker.record("other_api", cost, "Telegram conversational reply", f"telegram-{response.id}")
+        return (response.output_text or "I couldn't read the current status. Try again in a moment.").strip()[:1200]
+
+
 def main() -> int:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     allowed_chat = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -154,17 +212,36 @@ def main() -> int:
     database = Database(os.getenv("DATABASE_PATH", "data/apex_weather.sqlite3"))
     database.migrate()
     controller = TelegramController(database, float(os.getenv("BANKROLL", "100")))
+    assistant = (ConversationAssistant(database, os.environ["OPENAI_API_KEY"], controller.bankroll)
+                 if os.getenv("TELEGRAM_CONVERSATION_ENABLED", "false").lower() == "true"
+                 and os.getenv("OPENAI_API_KEY") else None)
     with database.connect() as connection:
         latest_health_id = int(connection.execute(
             "SELECT COALESCE(MAX(id),0) FROM health_events"
         ).fetchone()[0])
     alert_cursor = {"id": latest_health_id}
+    with database.connect() as connection:
+        trade_cursor = {"id": int(connection.execute("SELECT COALESCE(MAX(rowid),0) FROM orders").fetchone()[0])}
+        settlement_cursor = {"id": int(connection.execute("SELECT COALESCE(MAX(rowid),0) FROM settlements").fetchone()[0])}
 
     async def reply(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.effective_chat or str(update.effective_chat.id) != allowed_chat:
             return
         if update.message and update.message.text:
             await update.message.reply_text(controller.handle(update.message.text))
+
+    async def chat(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.effective_chat or str(update.effective_chat.id) != allowed_chat or not update.message:
+            return
+        if assistant is None:
+            await update.message.reply_text("Chat is not enabled yet. Use /today or /positions for now.")
+            return
+        await update.message.reply_text("Checking.")
+        try:
+            answer = await asyncio.to_thread(assistant.answer, update.message.text or "")
+        except Exception:
+            answer = "I couldn't check that right now. Try again in a minute."
+        await update.message.reply_text(answer)
 
     async def send_daily(context: ContextTypes.DEFAULT_TYPE) -> None:
         await context.bot.send_message(chat_id=allowed_chat, text=controller.handle("/today"))
@@ -184,8 +261,35 @@ def main() -> int:
             )
             alert_cursor["id"] = int(row["id"])
 
+    async def send_trade_alerts(context: ContextTypes.DEFAULT_TYPE) -> None:
+        with database.connect() as connection:
+            orders = connection.execute(
+                "SELECT rowid,ticker,side,filled_contracts,price_cents,paper FROM orders "
+                "WHERE rowid>? AND filled_contracts>0 ORDER BY rowid", (trade_cursor["id"],)
+            ).fetchall()
+            settlements = connection.execute(
+                "SELECT s.rowid,s.ticker,COALESCE(SUM(p.realized_pnl_usd),0) pnl "
+                "FROM settlements s JOIN positions p ON p.ticker=s.ticker AND p.contracts=0 "
+                "WHERE s.rowid>? GROUP BY s.rowid,s.ticker ORDER BY s.rowid", (settlement_cursor["id"],)
+            ).fetchall()
+        for row in orders:
+            amount = float(row["filled_contracts"]) * float(row["price_cents"]) / 100
+            await context.bot.send_message(chat_id=allowed_chat, text=(
+                f"Paper trade: bought {str(row['side']).upper()} on {row['ticker']}.\n"
+                f"${amount:.2f} at {row['price_cents']}¢."
+            ))
+            trade_cursor["id"] = int(row["rowid"])
+        for row in settlements:
+            pnl = float(row["pnl"])
+            result = "WON" if pnl > 0 else "LOST" if pnl < 0 else "settled even"
+            await context.bot.send_message(chat_id=allowed_chat, text=(
+                f"Paper result: {result}.\n{row['ticker']} | {'+' if pnl > 0 else ''}${pnl:.2f}."
+            ))
+            settlement_cursor["id"] = int(row["rowid"])
+
     application = Application.builder().token(token).build()
     application.add_handler(MessageHandler(filters.COMMAND, reply))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
     if application.job_queue is None:
         raise RuntimeError("Telegram job queue dependency is unavailable")
     summary_hour, summary_minute = (
@@ -198,6 +302,7 @@ def main() -> int:
     application.job_queue.run_repeating(
         send_important_health, interval=60, first=15, name="important-health-alerts",
     )
+    application.job_queue.run_repeating(send_trade_alerts, interval=30, first=20, name="trade-alerts")
     application.run_polling(drop_pending_updates=True)
     return 0
 
