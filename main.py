@@ -1,6 +1,5 @@
-def main():
-    print("Hello from apex-trading!")
+from src.weather_daemon import main
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

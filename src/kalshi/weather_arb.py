@@ -121,7 +121,7 @@ def _fetch_noaa_hourly(lat: float, lon: float) -> list[float]:
         # Step 1: resolve grid point
         pts_resp = requests.get(
             f"https://api.weather.gov/points/{lat},{lon}",
-            headers={"User-Agent": "APEX-Trading/1.0 (leeoniisrael@gmail.com)"},
+            headers={"User-Agent": os.getenv("NWS_USER_AGENT", "APEX-Weather/2.0 contact=operator")},
             timeout=10,
         )
         pts_resp.raise_for_status()
@@ -131,7 +131,7 @@ def _fetch_noaa_hourly(lat: float, lon: float) -> list[float]:
         # Step 2: fetch hourly forecast
         fc_resp = requests.get(
             forecast_url,
-            headers={"User-Agent": "APEX-Trading/1.0 (leeoniisrael@gmail.com)"},
+            headers={"User-Agent": os.getenv("NWS_USER_AGENT", "APEX-Weather/2.0 contact=operator")},
             timeout=10,
         )
         fc_resp.raise_for_status()

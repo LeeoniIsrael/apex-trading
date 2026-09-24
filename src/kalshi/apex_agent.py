@@ -565,6 +565,11 @@ def startup() -> None:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    if os.getenv("ALLOW_LEGACY_AGENT", "false").lower() != "true":
+        raise SystemExit(
+            "Legacy multi-strategy agent is disabled. Run `python -m src.weather_daemon` "
+            "for the fail-closed weather-v2 service."
+        )
     tg.start_bot_listener()
 
     startup()
