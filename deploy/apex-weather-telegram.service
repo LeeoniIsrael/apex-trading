@@ -1,0 +1,22 @@
+[Unit]
+Description=APEX Little Lio Trader Telegram controls
+After=network-online.target apex-weather.service
+
+[Service]
+Type=simple
+User=apex-weather
+Group=apex-weather
+WorkingDirectory=/opt/apex-weather/app
+EnvironmentFile=/etc/apex-weather/apex-weather.env
+ExecStart=/opt/apex-weather/venv/bin/python -m src.monitoring.telegram
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/apex-weather
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

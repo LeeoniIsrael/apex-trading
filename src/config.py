@@ -6,15 +6,18 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     # Alpaca
-    alpaca_api_key: str = Field(..., description="Alpaca API key")
-    alpaca_secret_key: str = Field(..., description="Alpaca secret key")
+    # Legacy equity credentials are optional at import time.  Components that
+    # use Alpaca must validate them when they start; a clean checkout and the
+    # weather-only service must not require unrelated secrets.
+    alpaca_api_key: str = Field(default="", description="Alpaca API key")
+    alpaca_secret_key: str = Field(default="", description="Alpaca secret key")
     alpaca_base_url: str = Field(
         default="https://paper-api.alpaca.markets",
         description="Alpaca base URL — paper until April 15",
     )
 
     # Anthropic
-    anthropic_api_key: str = Field(..., description="Anthropic API key")
+    anthropic_api_key: str = Field(default="", description="Anthropic API key")
 
     # APEX limits
     apex_live_cap_usd: float = Field(

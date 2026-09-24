@@ -16,8 +16,11 @@ def crypto_compound_bet_usd(
     Larger buffer = more certain = scale up. Entry near 90c = less room = scale down.
     """
     price_room = max(0.0, (95 - entry_cents) / 45.0)
-    bet = base_bet_usd * (1.0 + buffer_pct * bet_multiplier) * price_room
-    return round(min(max(bet, base_bet_usd * 0.5), max_bet_usd), 2)
+    # A 4% buffer is the unit-confidence signal; scale linearly around it and
+    # never let a qualifying entry fall below the configured base amount.
+    buffer_units = max(0.0, buffer_pct / 0.04)
+    bet = base_bet_usd * bet_multiplier * buffer_units * price_room
+    return round(min(max(bet, base_bet_usd), max_bet_usd), 2)
 
 
 def should_exit_crypto(
@@ -45,10 +48,10 @@ def should_exit_crypto(
         return True, f"near expiry ({hours_left * 60:.0f} min left)"
     if spot_now > 0 and spot_entry > 0:
         spot_move = (spot_now - spot_entry) / spot_entry
-        adverse = (direction == "above" and spot_move < -0.02) or \
-                  (direction == "below" and spot_move > 0.02)
+        adverse = (direction == "above" and spot_move < 0) or \
+                  (direction == "below" and spot_move > 0)
         if adverse and current_cents < drop_exit_cents and profit_pct >= break_even_floor:
             return True, (
-                f"adverse spot {spot_move:.1%}, odds={current_cents}c < {drop_exit_cents}c"
+                f"adverse spot {spot_move:.1%}, odds<{drop_exit_cents}c (now {current_cents}c)"
             )
     return False, ""

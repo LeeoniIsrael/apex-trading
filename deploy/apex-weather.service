@@ -1,0 +1,24 @@
+[Unit]
+Description=APEX autonomous weather paper trader
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
+
+[Service]
+Type=simple
+User=apex-weather
+Group=apex-weather
+WorkingDirectory=/opt/apex-weather/app
+EnvironmentFile=/etc/apex-weather/apex-weather.env
+ExecStart=/opt/apex-weather/venv/bin/python -m src.weather_daemon
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/apex-weather
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
