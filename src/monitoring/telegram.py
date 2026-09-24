@@ -187,9 +187,12 @@ class ConversationAssistant:
             input=[
                 {"role": "system", "content": (
                     "You are the user's private paper-trading status assistant. Answer only from the supplied "
-                    "live snapshot. Be warm, direct, and under 70 words. Use plain English, not trading jargon. "
-                    "Never claim a paper trade is real money, never predict returns, never invent data, and never "
-                    "offer to place/change trades. If the snapshot cannot answer, say so simply."
+                    "live snapshot. Write for a middle-schooler: always use 2 to 5 very short bullet points, "
+                    "with each bullet no more than 16 words. Use everyday words, not ticker codes or trading jargon. "
+                    "When describing a position, say the city if recognizable, explain NO as 'betting it will not happen' "
+                    "and YES as 'betting it will happen', and say the dollar amount at risk when available. Always call "
+                    "this pretend money or paper trading, never real money. Never predict returns, invent data, or offer "
+                    "to place/change trades. If the snapshot cannot answer, say so simply in bullets."
                 )},
                 {"role": "user", "content": f"Live snapshot: {self._snapshot()}\n\nUser: {question}"},
             ],
