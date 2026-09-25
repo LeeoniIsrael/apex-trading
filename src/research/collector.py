@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.kalshi.client import KalshiClientV2
+from src.kalshi.fee_schedule import effective_fee
+from src.execution.portfolio_audit import pages
 from src.storage.database import Database
 from src.strategy.settlement import SettlementSpec, parse_settlement_spec
 
@@ -51,6 +53,8 @@ class MarketCollector:
 
     def discover(self, page_limit: int = 1000, max_pages: int = 10) -> list[SettlementSpec]:
         candidates: list[dict[str, Any]] = []
+        fee_changes = pages(self.client.get_event_fee_changes, 'event_fee_changes')
+        fee_now = datetime.now(timezone.utc)
         series_payload = self.client.get_series_list(category="Climate and Weather")
         temperature_series = [
             series for series in series_payload.get("series", [])
@@ -68,8 +72,12 @@ class MarketCollector:
             for market in payload.get("markets", []):
                 if _weather_candidate(market):
                     market["series_ticker"] = series_ticker
-                    market["_fee_type"] = series.get("fee_type")
-                    market["_fee_multiplier"] = series.get("fee_multiplier")
+                    try:
+                        kind, multiplier = effective_fee(series, market.get('event_ticker'), fee_changes, fee_now)
+                        market['_fee_type'], market['_fee_multiplier'] = kind, str(multiplier)
+                        market['_fee_event_checked_at'] = fee_now.isoformat()
+                    except (ValueError, ArithmeticError):
+                        market['_fee_type'], market['_fee_multiplier'] = None, None
                     market["_settlement_sources"] = series.get("settlement_sources")
                     candidates.append(market)
 

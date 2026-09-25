@@ -7,7 +7,9 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from src.kalshi.fees import trading_fee_usd
-from src.execution.portfolio_audit import reconcile_portfolio
+from src.execution.portfolio_audit import reconcile_portfolio, pages
+from src.kalshi.fee_schedule import effective_fee
+from src.research.experiments import MODEL_VERSION
 from src.research.readiness import database_readiness
 from src.storage.database import Database
 from src.strategy.settlement import parse_settlement_spec
@@ -85,7 +87,7 @@ class LiveExecutor:
             c.execute('BEGIN IMMEDIATE')
             if c.execute('SELECT 1 FROM orders WHERE client_order_id=?',(client_id,)).fetchone():
                 raise RuntimeError('duplicate client order blocked')
-            balance = min(self._gate(), self.settings.live_capital_limit_usd)
+            balance = self._gate()
             if c.execute('SELECT COUNT(*) FROM orders WHERE paper=0').fetchone()[0] != audit.orders:
                 raise RuntimeError('portfolio changed during reconciliation')
             with self.paper_database.connect() as p:
@@ -98,15 +100,26 @@ class LiveExecutor:
             if (not spec.tradeable or not spec.observation_window_end or now >= spec.observation_window_end
                 or not getattr(spec, 'last_trading_time', None) or now >= spec.last_trading_time
                 or not 0 <= age <= 60 or candidate['observation_age']+age > 7200
+                or candidate['model_version'] != MODEL_VERSION
                 or candidate['final_action'] != 'BUY_'+side.upper() or candidate['net_ev_usd'] <= 0
                 or price_cents > candidate['price_cents'] or contracts > candidate['contracts']):
                 raise RuntimeError('stale, ambiguous, or nonqualifying deterministic intent')
             if raw.get('_fee_type') != 'quadratic':
                 raise RuntimeError('unknown fee schedule')
-            rate = Decimal('.07') * Decimal(str(raw['_fee_multiplier']))
+            event = raw.get('event_ticker')
+            series_ticker = raw.get('series_ticker')
+            if not event or not series_ticker:
+                raise RuntimeError('missing fee identifiers')
+            series = self.client.get_series(series_ticker).get('series', {})
+            changes = pages(lambda **kw:self.client.get_event_fee_changes(event_ticker=event, **kw), 'event_fee_changes')
+            _, multiplier = effective_fee(series, event, changes, datetime.now(timezone.utc))
+            rate = Decimal('.07') * multiplier
             if not rate.is_finite() or rate < 0:
                 raise RuntimeError('invalid fee schedule')
-            value = contracts*price_cents/100 + float(trading_fee_usd(contracts,price_cents,rate=rate))
+            fee = float(trading_fee_usd(contracts,price_cents,rate=rate))
+            value = contracts*price_cents/100 + fee
+            if candidate['probability'] - price_cents/100 - fee/contracts < self.settings.min_net_edge:
+                raise RuntimeError('fee-adjusted edge no longer qualifies')
             s=self.settings
             reserved = float(audit.open_cost)
             cities = {}

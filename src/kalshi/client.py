@@ -84,6 +84,12 @@ class KalshiClientV2:
     def get_series_list(self, **params: Any) -> dict[str, Any]:
         return self.request("GET", "/series", params=params)
 
+    def get_series(self, ticker: str) -> dict[str, Any]:
+        return self.request("GET", f"/series/{ticker}")
+
+    def get_event_fee_changes(self, **params: Any) -> dict[str, Any]:
+        return self.request("GET", "/events/fee_changes", params=params)
+
     def get_market(self, ticker: str) -> dict[str, Any]:
         return self.request("GET", f"/markets/{ticker}")
 

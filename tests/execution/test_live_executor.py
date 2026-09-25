@@ -17,6 +17,8 @@ class FakeClient:
     def get_fills(self,**kw): return {'fills':[]}
     def get_settlements(self,**kw): return {'settlements':[]}
     def get_positions(self,**kw): return {'market_positions':[]}
+    def get_series(self,ticker): return {'series':{'fee_type':'quadratic','fee_multiplier':1}}
+    def get_event_fee_changes(self,**kw): return {'event_fee_changes':[]}
     def create_order(self,**kwargs):
         self.calls.append(kwargs)
         self.orders.append(dict(kwargs,order_id='remote-'+kwargs['client_order_id'],initial_count_fp=str(kwargs['contracts']),fill_count_fp='0',remaining_count_fp='0',status='canceled'))
@@ -31,10 +33,10 @@ def setup(tmp_path, monkeypatch):
     settings=WeatherSettings(_env_file=None,trading_mode='live',database_path=paper.path,live_database_path=live.path,live_enablement_path=marker)
     monkeypatch.setattr('src.execution.live_executor.database_readiness',lambda *a:(True,(),None))
     now=datetime.now(timezone.utc)
-    market={'ticker':'TEST','rules_primary':f'Maximum temperature at CLIAUS for {now.strftime("%b %d, %Y")} is less than 96 according to The Weather Company.','_fee_type':'quadratic','_fee_multiplier':1}
+    market={'ticker':'TEST','event_ticker':'EVENT','series_ticker':'SERIES','rules_primary':f'Maximum temperature at CLIAUS for {now.strftime("%b %d, %Y")} is less than 96 according to The Weather Company.','_fee_type':'quadratic','_fee_multiplier':1}
     with paper.transaction() as c:
         c.execute('INSERT INTO markets(ticker,raw_json,observed_at) VALUES(?,?,?)',('TEST',json.dumps(market),now.isoformat()))
-        c.execute("INSERT INTO research_candidates(ticker,event_key,captured_at,split,model_version,side,price_cents,contracts,fee_usd,probability,net_ev_usd,baseline_action,final_action,source,station,city,market_type,price_bucket,time_bucket,seconds_to_close,observation_age,liquidity,lag_candidate,control) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",('TEST','event',now.isoformat(),'holdout','v1','yes',40,2,.04,.9,.96,'BUY_YES','BUY_YES','twc','KAUS','Austin','high','>10c','early',3600,60,2,0,0))
+        c.execute("INSERT INTO research_candidates(ticker,event_key,captured_at,split,model_version,side,price_cents,contracts,fee_usd,probability,net_ev_usd,baseline_action,final_action,source,station,city,market_type,price_bucket,time_bucket,seconds_to_close,observation_age,liquidity,lag_candidate,control) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",('TEST','event',now.isoformat(),'holdout','source-uncertainty-v3','yes',40,2,.04,.9,.96,'BUY_YES','BUY_YES','twc','KAUS','Austin','high','>10c','early',3600,60,2,0,0))
     # Keep date boundaries independent of the time this test runs.
     from datetime import timedelta
     monkeypatch.setattr('src.execution.live_executor.parse_settlement_spec', lambda raw:SimpleNamespace(tradeable=True,observation_window_end=now+timedelta(hours=2),last_trading_time=now+timedelta(hours=2),city='Austin'))
