@@ -53,6 +53,8 @@ cd /opt/apex-weather/app
 /opt/apex-weather/venv/bin/python -m src.weather_cli launch-report
 /opt/apex-weather/venv/bin/python -m src.weather_cli balance-test
 /opt/apex-weather/venv/bin/python -m src.weather_cli enable-live --confirm I_ACCEPT_LIVE_RISK --accept-unvalidated-strategy
+chown apex-weather:apex-weather /var/lib/apex-weather/LIVE_ENABLED
+chmod 600 /var/lib/apex-weather/LIVE_ENABLED
 /opt/apex-weather/venv/bin/python -c "from dotenv import set_key; set_key('/etc/apex-weather/apex-weather.env', 'TRADING_MODE', 'live')"
 systemctl restart apex-weather apex-weather-telegram
 systemctl is-active apex-weather apex-weather-telegram

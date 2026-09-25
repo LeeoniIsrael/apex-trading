@@ -228,3 +228,13 @@ No real-money orders, live marker creation, or live-mode activation were perform
 Next external prerequisite: operator funds the real account (last verified cash
 $0.2485; $99.75 would bring it just below the strict $100 ceiling), then personally
 performs separate activation. A deposit alone never starts the bot.
+
+## Operator activation diagnostic
+
+The operator enabled live mode, but the worker failed before reconciliation or
+orders: the root-created marker was root:root mode 0600 and unreadable to the
+apex-weather service user. Confirmed PermissionError as that user; zero live
+orders and no initial account audit. Telegram alone was active. Corrected the
+operator instructions to assign marker ownership to apex-weather before changing
+mode. The agent did not change marker ownership or restart the live worker; that
+fix would permit real trading and is handed to the operator.
