@@ -75,3 +75,12 @@ def test_status_questions_work_without_pricing_or_api_call(tmp_path,monkeypatch)
     assert 'Fees paid' in a.answer('What are our costs?')
     assert "I don't know" in a.answer('Buy more positions')
     assert not fake.calls
+
+
+def test_upgrade_baseline_does_not_reannounce_old_trades(tmp_path):
+    db=Database(tmp_path/'db'); db.migrate()
+    with db.transaction() as c:
+        fill(c,'old','yes',1,40,.02)
+        c.execute('INSERT INTO control_state VALUES(?,?,?)',('alert_baseline','2026-09-24T00:00:00+00:00','2026-09-24T00:00:00+00:00'))
+        fill(c,'new','yes',1,40,.02,stamp='2026-09-24T01:00:00+00:00')
+    assert [key for key,_ in AlertQueue(db).pending()]==['fill:fnew']

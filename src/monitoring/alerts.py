@@ -29,13 +29,13 @@ class AlertQueue:
     def pending(self):
         with self.database.connect() as c:
             rows=c.execute("SELECT f.*,o.action,m.raw_json FROM fills f JOIN orders o ON o.id=f.order_id "
-                           "LEFT JOIN markets m ON m.ticker=f.ticker WHERE o.paper=1 AND NOT EXISTS "
+                           "LEFT JOIN markets m ON m.ticker=f.ticker WHERE o.paper=1 AND f.filled_at>=COALESCE((SELECT value FROM control_state WHERE key='alert_baseline'), '') AND NOT EXISTS "
                            "(SELECT 1 FROM notification_deliveries n WHERE n.event_key='fill:'||f.id) ORDER BY f.filled_at LIMIT 20").fetchall()
             settlements=c.execute("SELECT s.*,m.raw_json market_json,SUM(p.realized_pnl_usd) pnl FROM settlements s "
                                   "JOIN positions p ON p.ticker=s.ticker AND p.contracts=0 LEFT JOIN markets m ON m.ticker=s.ticker "
-                                  "WHERE s.final=1 AND NOT EXISTS (SELECT 1 FROM notification_deliveries n WHERE n.event_key='settlement:'||s.ticker) "
+                                  "WHERE s.final=1 AND s.settled_at>=COALESCE((SELECT value FROM control_state WHERE key='alert_baseline'), '') AND NOT EXISTS (SELECT 1 FROM notification_deliveries n WHERE n.event_key='settlement:'||s.ticker) "
                                   "GROUP BY s.ticker LIMIT 20").fetchall()
-            health=c.execute("SELECT id,severity,component,code FROM health_events WHERE severity IN ('error','critical') "
+            health=c.execute("SELECT id,severity,component,code FROM health_events WHERE severity IN ('error','critical') AND occurred_at>=COALESCE((SELECT value FROM control_state WHERE key='alert_baseline'), '') "
                              "AND NOT EXISTS (SELECT 1 FROM notification_deliveries n WHERE n.event_key='health:'||health_events.id) ORDER BY id LIMIT 20").fetchall()
         events=[]
         for r in health:
