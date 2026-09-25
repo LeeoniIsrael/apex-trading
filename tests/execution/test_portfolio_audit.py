@@ -64,3 +64,19 @@ def test_pagination_collects_all_pages_and_rejects_cycles():
     assert pages(lambda **k:{'items':[2]} if k else {'items':[1],'cursor':'next'},'items')==[1,2]
     with pytest.raises(RuntimeError,match='pagination'):
         pages(lambda **k:{'items':[],'cursor':'loop'},'items')
+
+
+def test_delayed_remote_order_blocks_then_recovers_without_new_submission(tmp_path):
+    db,client,order,fill=fixture(tmp_path)
+    fetch=client.get_orders
+    client.get_orders=lambda **k:{'orders':[]}
+    with pytest.raises(RuntimeError, match='ambiguous submission'):
+        reconcile_portfolio(db,client,99.1664,100)
+    with db.connect() as conn:
+        assert conn.execute('SELECT status FROM orders').fetchone()[0]=='unknown'
+        assert conn.execute('SELECT COUNT(*) FROM live_remote_records').fetchone()[0]==0
+    client.get_orders=fetch
+    result=reconcile_portfolio(Database(db.path),client,99.1664,100)
+    assert result.fills==1 and result.orders==1
+    assert result.open_cost==Decimal('.8336')
+    assert reconcile_portfolio(Database(db.path),client,99.1664,100)==result

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.asymmetric import padding, rsa, ed25519
 
 
 @dataclass(slots=True)
@@ -25,16 +25,21 @@ class KalshiSigner:
         self._private_key = serialization.load_pem_private_key(
             self.private_key_path.read_bytes(), password=None,
         )
+        if not isinstance(self._private_key, (rsa.RSAPrivateKey, ed25519.Ed25519PrivateKey)):
+            raise ValueError("unsupported Kalshi key type; use RSA or Ed25519")
 
     def headers(self, method: str, path_without_query: str) -> dict[str, str]:
         timestamp_ms = str(int(time.time() * 1000))
         message = f"{timestamp_ms}{method.upper()}{path_without_query}".encode()
-        signature = self._private_key.sign(
-            message,
-            padding.PSS(mgf=padding.MGF1(hashes.SHA256()),
-                        salt_length=padding.PSS.DIGEST_LENGTH),
-            hashes.SHA256(),
-        )
+        if isinstance(self._private_key, ed25519.Ed25519PrivateKey):
+            signature = self._private_key.sign(message)
+        else:
+            signature = self._private_key.sign(
+                message,
+                padding.PSS(mgf=padding.MGF1(hashes.SHA256()),
+                            salt_length=padding.PSS.DIGEST_LENGTH),
+                hashes.SHA256(),
+            )
         return {
             "KALSHI-ACCESS-KEY": self.key_id,
             "KALSHI-ACCESS-TIMESTAMP": timestamp_ms,

@@ -91,3 +91,48 @@ reconciliation; it does not silently retry an expired intent.
 This follow-up does not deploy or enable live trading, write production verification
 passes, change the model cohort, or adjust risk limits. Paper and Telegram services
 remain active. Include this prepared fix in the next reviewed deployment.
+
+## Demo account integration — 2026-09-25 19:49 UTC
+
+User supplied a demo-only key. The downloaded key is Ed25519; the former RSA-only
+signer failed before making an HTTP request. Added parsed-key-type dispatch for
+Ed25519 and RSA, with independent public-key signature verification tests for
+Ed25519, RSA PKCS#1 and RSA PKCS#8 and rejection of unsupported EC keys.
+Official reference: https://docs.kalshi.com/getting_started/api_keys .
+
+Authenticated against the explicitly pinned demo endpoint
+`https://external-api.demo.kalshi.co/trade-api/v2`. Starting mock cash was $200.
+The credential is stored outside git in the operator's private configuration
+directory, with directory mode 0700 and credential/config files mode 0600.
+No production credential, configuration, service or verification pass changed.
+
+A one-off integration harness used the actual REST client and portfolio auditor,
+with its own SQLite database and durable intents. It did NOT run the full
+LiveExecutor or weather profit-selection strategy. Read and parsed the complete
+market rules, then tested `KXHIGHNY-26SEP26-T62`:
+
+- One YES contract limit 1 cent, IOC: cancelled with zero fills.
+- One YES contract limit 59 cents, IOC: filled at 59 cents, exact fee $0.017.
+- Remaining cash $199.3930; open cost including fee $0.6070; one open YES
+  contract; realized profit $0. No resting orders remain.
+- Initial post-fill portfolio read omitted the order, so reconciliation blocked.
+  Later read-only reconciliation recovered it without resubmitting. Added a
+  regression test for this delayed-history failure/recovery path.
+- Reopening the database and auditing again produced identical totals; inserting
+  the same durable intent was rejected by SQLite uniqueness before any POST.
+- The single-market GET returned 404 in demo although list and orderbook endpoints
+  returned the market. The harness used the complete listed market record.
+
+Evidence and harness are at
+`~/.local/share/apex-weather/demo-test/report.json`, `demo.sqlite3`, and `check.py`.
+Do not rerun the submission harness to seek more fills; it intentionally reserves
+fixed unique IDs. Read-only reconciliation can be repeated independently.
+The demo-only $200 accounting baseline matches Kalshi's mock grant and does not
+raise the production $100 capital limit. This is exchange plumbing evidence,
+not strategy performance, settlement verification, a production execution test,
+or a passed full unattended-live launch checklist. No real-money order was sent.
+Changes are prepared locally and pushed; production deployment remains pending.
+
+User now explicitly requests considering an unproven $100 pilot before 200
+resolved events. The 200-event threshold is research policy, not an exchange
+requirement. It has not been waived in code, and the live marker remains absent.
