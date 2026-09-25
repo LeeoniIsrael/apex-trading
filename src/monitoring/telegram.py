@@ -128,8 +128,8 @@ class ConversationAssistant:
         self.database, self.bankroll = database, bankroll
         self.client = client or OpenAI(api_key=api_key, timeout=12, max_retries=0)
         self.model = os.getenv("TELEGRAM_CHAT_MODEL", "gpt-6-luna")
-        self.daily_cap = float(os.getenv("TELEGRAM_CHAT_DAILY_USD", "0.05"))
-        self.monthly_cap = float(os.getenv("TELEGRAM_CHAT_MONTHLY_USD", "1.00"))
+        self.daily_cap = float(os.getenv("TELEGRAM_CHAT_DAILY_USD", "0.03"))
+        self.monthly_cap = float(os.getenv("TELEGRAM_CHAT_MONTHLY_USD", "0.50"))
         # Operators must configure verified model-specific rates; unknown pricing fails closed.
         self.input_rate = float(os.getenv("TELEGRAM_INPUT_USD_PER_MILLION", "0"))
         self.output_rate = float(os.getenv("TELEGRAM_OUTPUT_USD_PER_MILLION", "0"))
@@ -140,7 +140,37 @@ class ConversationAssistant:
 
     def _render(self, topic):
         a=paper_account(self.database,self.bankroll)
-        if topic=='status': return TelegramController(self.database,self.bankroll).handle('/status')
+        if topic in {'status','summary','why_stopped','live_readiness','how_it_works'}:
+            with self.database.connect() as c:
+                settled=c.execute("SELECT COUNT(DISTINCT o.ticker) FROM orders o JOIN settlements s ON s.ticker=o.ticker AND s.final=1 WHERE o.paper=1 AND o.filled_contracts>0").fetchone()[0]
+                infra=c.execute("SELECT COALESCE(SUM(amount_usd),0) FROM costs WHERE category='infrastructure'").fetchone()[0]
+                controls=dict(c.execute('SELECT key,value FROM control_state'))
+                latest=c.execute('SELECT MAX(predicted_at) FROM model_predictions').fetchone()[0]
+            current=bool(latest and 0 <= (datetime.now(timezone.utc)-datetime.fromisoformat(latest)).total_seconds()<900)
+            if topic=='how_it_works':
+                return ('• It checks official weather data and compares both sides of each bet.\n'
+                        '• It subtracts fees, checks the risk limits, and skips bad prices.\n'
+                        '• Weather research uses no LLM tokens. Chat cannot change bets.\n'
+                        '• Everything is still paper money. Real trading needs a separate approval.')
+            if topic=='live_readiness':
+                return (f'• We are not ready to risk your $100 yet. This is paper trading.\n'
+                        f'• Only {settled} traded markets have finished. That does not prove an edge.\n'
+                        '• We still need independent results and complete live-order recovery checks.\n'
+                        '• I cannot promise profits or turn on real trading through chat.')
+            if topic=='why_stopped':
+                if a.max_drawdown>=.15:
+                    return (f'• New paper bets are stopped by the safety limit.\n'
+                            f'• The recorded drop is {a.max_drawdown:.1%}; the limit is 15%.\n'
+                            f'• Costs count too: ${infra:.2f} in server bills was charged against the starting money.\n'
+                            '• This does not mean all that drop came from losing bets. Research can continue.')
+                return ('• This is paper trading.\n• I do not see a drawdown stop right now.\n• Other price, data, or risk checks can still block a bet.')
+            stopped=(a.max_drawdown>=.15 or a.discrepancies or controls.get('paused')=='true' or controls.get('emergency_stop')=='true')
+            return (('• It is running, but we have not proved reliable profits.\n' if current else
+                     '• I cannot confirm fresh research right now. This is paper trading.\n')
+                    +f'• Pretend profit after costs: ${a.after_cost_result:.2f}. Only {settled} traded markets have finished.\n'
+                    +('• Safety checks are blocking new bets. Research does not bypass those checks.\n' if stopped else
+                      '• It can consider paper bets only when every safety check passes.\n')
+                    +f'• Current paper equity: ${a.equity:.2f}. No real money is being traded.')
         if topic=='costs':
             return (f"• This is paper money. Fees paid: ${a.fees:.2f}.\n"
                     f"• Infrastructure and API costs: ${a.operating_costs:.2f}.\n"
@@ -160,27 +190,34 @@ class ConversationAssistant:
         import uuid
         import math
         tracker=CostTracker(self.database)
+        import re
+        words=set(re.findall(r"[a-z]+", question.lower()))
+        topic=None
+        if words & {'live','real'}: topic='live_readiness'
+        elif words & {'buy','sell','place','change','enable','resume','pause'}: topic='unknown'
+        elif words & {'stopped','blocked','drawdown'}: topic='why_stopped'
+        elif words & {'cost','costs','fees','expenses','tokens'}: topic='costs'
+        elif words & {'positions','bets','exposure','risk'}: topic='positions'
+        elif words & {'works','technique','techniques','strategy'}: topic='how_it_works'
+        elif words & {'status','bankroll','balance','equity','profit','money','doing','hello','hi'}: topic='summary'
+        if topic is not None:
+            return self._render(topic)
+        cache_key='chat_topic:'+__import__('hashlib').sha256(question[:1200].strip().lower().encode()).hexdigest()
+        with self.database.connect() as c:
+            cached=c.execute('SELECT value,updated_at FROM control_state WHERE key=?',(cache_key,)).fetchone()
+        if cached and 0 <= (datetime.now(timezone.utc)-datetime.fromisoformat(cached['updated_at'])).total_seconds()<300:
+            return self._render(cached['value'])
         if not all(math.isfinite(v) and v>0 for v in (self.input_rate,self.output_rate)):
-            # Ordinary status questions remain useful without paid AI routing.
-            import re
-            words=set(re.findall(r"[a-z]+", question.lower()))
-            if words & {'buy','sell','place','change','enable','resume','pause'}:
-                return self._render('unknown')
-            if words & {'cost','costs','fees','expenses'}:
-                return self._render('costs')
-            if words & {'positions','bets','exposure','risk'}:
-                return self._render('positions')
-            if words & {'status','bankroll','balance','equity','profit','money','doing','hello','hi'}:
-                return self._render('status')
             return self._render('unknown')
-        prompt = 'Choose exactly one read-only topic: status, positions, costs, unknown. Trade/change requests are unknown. Question: '+question[:1200]
+        prompt = ('Choose exactly one read-only topic: summary, positions, costs, why_stopped, live_readiness, how_it_works, unknown. '
+                  'Requests to place trades or change settings are unknown. Question: '+question[:1200])
         reserve=(len(prompt.encode('utf-8'))*self.input_rate+32*self.output_rate)/1_000_000
         reservation='telegram-reservation-'+str(uuid.uuid4())
         # Atomic reservation prevents concurrent replies from spending the same budget.
         now=datetime.now(timezone.utc)
         with self.database.transaction() as c:
             c.execute('BEGIN IMMEDIATE')
-            if not tracker.can_spend('other_api',reserve,daily_limit=self.daily_cap,monthly_limit=self.monthly_cap):
+            if not tracker.can_spend_categories(('other_api','openai_api','jev_api'),reserve,daily_limit=self.daily_cap,monthly_limit=self.monthly_cap):
                 return '• This is paper trading.\n• Chat budget is used up. Try /status for current numbers.'
             c.execute('INSERT INTO costs(incurred_at,category,amount_usd,description,external_id) VALUES(?,?,?,?,?)',
                       (now.isoformat(),'other_api',reserve,'Telegram reply budget reservation',reservation))
@@ -194,7 +231,10 @@ class ConversationAssistant:
             with self.database.transaction() as c:
                 c.execute('UPDATE costs SET amount_usd=?,description=? WHERE external_id=?',(cost,'Telegram reply measured usage',reservation))
             topic=(response.output_text or '').strip().lower()
-            return self._render(topic if topic in {'status','positions','costs'} else 'unknown')
+            with self.database.transaction() as c:
+                c.execute('INSERT OR REPLACE INTO control_state VALUES(?,?,?)',(cache_key,topic,datetime.now(timezone.utc).isoformat()))
+                c.execute("DELETE FROM control_state WHERE key LIKE 'chat_topic:%' AND updated_at<?",((datetime.now(timezone.utc)-timedelta(minutes=5)).isoformat(),))
+            return self._render(topic if topic in {'status','summary','positions','costs','why_stopped','live_readiness','how_it_works'} else 'unknown')
         except Exception:
             # Uncertain charges retain the reservation; errors never become trading instructions.
             return "• This is paper trading.\n• I don't know right now. Try /status."

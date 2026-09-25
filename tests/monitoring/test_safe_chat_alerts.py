@@ -40,10 +40,10 @@ def test_normal_replies_are_short_grounded_and_read_only(tmp_path,monkeypatch,te
 def test_budget_blocks_call_and_failed_call_keeps_reservation(tmp_path,monkeypatch):
     a,fake,db=assistant(tmp_path,monkeypatch,'ERROR')
     a.daily_cap=0
-    assert 'budget' in a.answer('status')
+    assert 'budget' in a.answer('Explain the current situation')
     assert not fake.calls
     a.daily_cap=.05
-    a.answer('status')
+    a.answer('Explain the current situation')
     with db.connect() as c: assert c.execute('SELECT SUM(amount_usd) FROM costs').fetchone()[0]>0
 
 
@@ -93,3 +93,22 @@ def test_status_explains_drawdown_block(tmp_path):
     status=TelegramController(db).handle('/status')
     assert 'NEW TRADES BLOCKED: drawdown limit' in status
     assert '$78.91' in status
+
+
+def test_plain_replies_and_cached_topics_avoid_repeated_api_calls(tmp_path,monkeypatch):
+    a,fake,db=assistant(tmp_path,monkeypatch,'summary')
+    assert 'not ready to risk your $100' in a.answer('Can we use real money?')
+    assert 'LLM tokens' in a.answer('How does the strategy work?')
+    assert not fake.calls
+    a.answer('Give me the rundown')
+    a.answer('Give me the rundown')
+    assert len(fake.calls)==1
+
+
+def test_chat_uses_shared_ai_budget(tmp_path,monkeypatch):
+    a,fake,db=assistant(tmp_path,monkeypatch)
+    from src.monitoring.costs import CostTracker
+    CostTracker(db).record('jev_api',.05,'prior review')
+    a.daily_cap=.03
+    assert 'budget' in a.answer('Give me the rundown')
+    assert not fake.calls

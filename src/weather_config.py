@@ -35,8 +35,8 @@ class WeatherSettings(BaseSettings):
     min_liquidity: int = Field(default=10, ge=1)
     max_forecast_disagreement_f: float = Field(default=10.0, ge=0)
     monte_carlo_simulations: int = Field(default=10_000, ge=100)
-    max_ai_daily_usd: float = Field(default=0.10, ge=0)
-    max_ai_monthly_usd: float = Field(default=1.00, ge=0)
+    max_ai_daily_usd: float = Field(default=0.03, ge=0)
+    max_ai_monthly_usd: float = Field(default=0.50, ge=0)
     jev_enabled: bool = False
     jev_api_key: str = ""
     jev_endpoint: str = "https://jevtypesafeai.com/api/v1/decide"
