@@ -16,8 +16,8 @@ from src.storage.database import Database
 
 
 def allocation(event_key: str) -> tuple[str, bool]:
-    number = int(hashlib.sha256(('apex-experiment-v1|' + event_key).encode()).hexdigest(), 16)
-    return ('holdout' if number % 5 == 0 else 'development', number % 10 == 1)
+    number = int(hashlib.sha256(('apex-experiment-v2|' + event_key).encode()).hexdigest(), 16)
+    return ('holdout' if number % 5 == 0 else 'development', (number // 5) % 10 == 1)
 
 
 def record_candidate(db: Database, *, spec, now, side, edge, baseline, final, jev,
@@ -57,10 +57,11 @@ def report(db: Database, bankroll: float = 100) -> dict:
     account = paper_account(db, bankroll)
     with db.connect() as c:
         rows = c.execute("SELECT r.*,s.yes_outcome FROM research_candidates r JOIN settlements s "
-                         "ON s.ticker=r.ticker AND s.final=1 WHERE r.model_version='two-sided-budget-v2' AND r.id IN "
-                         "(SELECT MIN(id) FROM research_candidates WHERE model_version='two-sided-budget-v2' AND baseline_action LIKE 'BUY%' GROUP BY ticker)").fetchall()
+                         "ON s.ticker=r.ticker AND s.final=1 WHERE r.model_version='two-sided-budget-v2' "
+                         "AND r.baseline_action LIKE 'BUY%' ORDER BY r.id").fetchall()
     groups = defaultdict(lambda: {'markets':0, 'hypothetical_pnl':0., 'actual_pnl':0.,
                                   'winners_vetoed':0, 'losers_vetoed':0, 'jev_pnl_difference':0.})
+    seen=set()
     for r in rows:
         win = r['yes_outcome'] == (1 if r['side']=='yes' else 0)
         pnl = r['contracts']*(int(win)-r['price_cents']/100)-r['fee_usd']
@@ -69,6 +70,10 @@ def report(db: Database, bankroll: float = 100) -> dict:
         if r['control']: arms.append('F_no_trade_control')
         if r['jev_action'] is not None: arms.append('G_jev_reviewed')
         for arm in arms:
+            key=(r['split'],arm,r['ticker'])
+            if key in seen:
+                continue
+            seen.add(key)
             g = groups[r['split']+'/'+arm]
             g['markets'] += 1
             g['hypothetical_pnl'] += pnl

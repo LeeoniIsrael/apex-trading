@@ -104,3 +104,10 @@ def test_balance_rejects_missing_auth_or_nan():
     with pytest.raises(RuntimeError): authenticated_balance(c)
     c.signer=object(); c.get_balance=lambda:{'balance_dollars':'NaN'}
     with pytest.raises(RuntimeError): authenticated_balance(c)
+
+
+def test_larger_account_cannot_bypass_hundred_dollar_budget(tmp_path,monkeypatch):
+    ex,client,paper,live,s=setup(tmp_path,monkeypatch)
+    client.get_balance=lambda:{'balance':10100}
+    with pytest.raises(RuntimeError,match='approved capital'): submit(ex)
+    assert not client.calls

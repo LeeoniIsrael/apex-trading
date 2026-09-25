@@ -53,6 +53,8 @@ class LiveExecutor:
                 if controls.get('emergency_stop') != 'false' or controls.get('paused') != 'false':
                     raise RuntimeError('emergency stop or pause is active')
         balance = authenticated_balance(self.client)
+        if balance > s.live_capital_limit_usd:
+            raise RuntimeError('funded balance exceeds approved capital; isolate the $100 account before live use')
         if balance < s.live_balance_floor_usd:
             raise RuntimeError('balance safety floor')
         return balance

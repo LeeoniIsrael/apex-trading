@@ -6,6 +6,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 from urllib.parse import urlparse
 
@@ -112,16 +113,26 @@ class KalshiClientV2:
             raise ValueError("invalid side/action")
         if not 1 <= price_cents <= 99 or contracts <= 0:
             raise ValueError("invalid order price/count")
+        # V2 quotes the YES leg: buying NO at 30c is an ask at YES 70c.
+        yes_price = price_cents if side == 'yes' else 100-price_cents
+        book_side = 'bid' if (action,side) in {('buy','yes'),('sell','no')} else 'ask'
         body: dict[str, Any] = {
-            "ticker": ticker,
-            "side": side,
-            "action": action,
-            "type": "limit",
-            "count": contracts,
-            "client_order_id": client_order_id or str(uuid.uuid4()),
-            f"{side}_price": price_cents,
+            'ticker': ticker, 'side': book_side, 'count': f'{contracts:.2f}',
+            'price': f'{Decimal(yes_price)/100:.4f}',
+            'client_order_id': client_order_id or str(uuid.uuid4()),
+            'time_in_force': 'immediate_or_cancel',
+            'self_trade_prevention_type': 'taker_at_cross',
+            'cancel_order_on_pause': True,
         }
-        return self.request("POST", "/portfolio/orders", json_body=body, authenticated=True)
+        result = self.request('POST','/portfolio/events/orders',json_body=body,authenticated=True)
+        filled=Decimal(str(result['fill_count']))
+        remaining=Decimal(str(result['remaining_count']))
+        if (not filled.is_finite() or not remaining.is_finite() or filled < 0 or remaining < 0
+            or filled != filled.to_integral_value() or remaining != remaining.to_integral_value()
+            or filled+remaining > contracts):
+            raise KalshiAPIError('fractional or invalid execution requires reconciliation')
+        status='executed' if filled else 'cancelled' if not remaining else 'resting'
+        return {'order':{**result,'status':status,'fill_count':int(filled)}}
 
     def cancel_order(self, order_id: str) -> dict[str, Any]:
         return self.request("DELETE", f"/portfolio/orders/{order_id}", authenticated=True)
