@@ -257,6 +257,7 @@ class WeatherService:
             self._spec_cache = (now, specs)
         current_specs = [spec for spec in specs if spec.tradeable
                          and spec.observation_window_start and spec.observation_window_end
+                         and spec.last_trading_time and now < spec.last_trading_time
                          and spec.observation_window_start <= now < spec.observation_window_end]
         station_cache: dict[
             tuple[str, OfficialSource], tuple[list[NormalizedObservation], ForecastRun, ForecastRun]
@@ -418,7 +419,7 @@ class WeatherService:
                 side=side, model_probability=side_probability, contracts=contracts,
                 orderbook=book, fill_probability=0.5, fee_rate=fee_rate,
             )
-            exposure = contracts * edge.executable_price_cents / 100
+            exposure = contracts * edge.executable_price_cents / 100 + edge.fee_usd
             blocks = risk_blocks(
                 RiskState(
                     len(open_tickers), total_exposure,
@@ -553,6 +554,8 @@ class WeatherService:
                 continue
             if decision.action.value not in {"BUY_YES", "BUY_NO"}:
                 continue
+            if self._control_blocked():
+                break
             client_order_id = str(uuid.uuid4())
             if self.live is not None:
                 self.live.submit_buy(

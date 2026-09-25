@@ -26,7 +26,9 @@ def record_candidate(db: Database, *, spec, now, side, edge, baseline, final, je
     event = '|'.join((spec.station_id or '', spec.official_source.value,
                       str(spec.market_date)))
     split, control = allocation(event)
-    seconds = (spec.observation_window_end-now).total_seconds()
+    if spec.last_trading_time is None or spec.last_trading_time <= now:
+        raise ValueError('market close time is missing or elapsed')
+    seconds = (spec.last_trading_time-now).total_seconds()
     price = edge.executable_price_cents
     bucket = '1-2c' if price <= 2 else '3-5c' if price <= 5 else '6-10c' if price <= 10 else '>10c'
     lag = (observation_age <= 300 and probability_change is not None and book_change is not None
