@@ -26,6 +26,18 @@ def authenticated_balance(client) -> float:
     return value
 
 
+def validate_intent_time(spec, candidate, now):
+    """Recheck wall-clock expiry after potentially slow remote preflight calls."""
+    captured = datetime.fromisoformat(candidate['captured_at'])
+    age = (now-captured).total_seconds()
+    observation_age = float(candidate['observation_age'])
+    if (not spec.observation_window_end or now >= spec.observation_window_end
+        or not getattr(spec, 'last_trading_time', None) or now >= spec.last_trading_time
+        or not math.isfinite(observation_age) or observation_age < 0
+        or not 0 <= age <= 60 or observation_age+age > 7200):
+        raise RuntimeError('stale or expired deterministic intent')
+
+
 class LiveExecutor:
     def __init__(self, settings, client, database: Database):
         if settings.trading_mode != 'live' or not settings.live_enablement_path.is_file():
@@ -96,10 +108,8 @@ class LiveExecutor:
             if not market or not candidate:
                 raise RuntimeError('missing deterministic evidence')
             raw = json.loads(market[0]); spec = parse_settlement_spec(raw)
-            age = (now-datetime.fromisoformat(candidate['captured_at'])).total_seconds()
-            if (not spec.tradeable or not spec.observation_window_end or now >= spec.observation_window_end
-                or not getattr(spec, 'last_trading_time', None) or now >= spec.last_trading_time
-                or not 0 <= age <= 60 or candidate['observation_age']+age > 7200
+            validate_intent_time(spec, candidate, datetime.now(timezone.utc))
+            if (not spec.tradeable
                 or candidate['model_version'] != MODEL_VERSION
                 or candidate['final_action'] != 'BUY_'+side.upper() or candidate['net_ev_usd'] <= 0
                 or price_cents > candidate['price_cents'] or contracts > candidate['contracts']):
@@ -152,6 +162,7 @@ class LiveExecutor:
         try:
             # Recheck stop after reservation, immediately before external action.
             self._gate()
+            validate_intent_time(spec, candidate, datetime.now(timezone.utc))
             result=self.client.create_order(ticker=ticker,side=side,action=action,price_cents=price_cents,
                                             contracts=contracts,client_order_id=client_id)
         except Exception:

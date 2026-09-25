@@ -116,3 +116,64 @@ def test_larger_account_cannot_bypass_hundred_dollar_budget(tmp_path,monkeypatch
     client.get_balance=lambda:{'balance':10100}
     with pytest.raises(RuntimeError,match='cash mismatch'): submit(ex)
     assert not client.calls
+
+
+@pytest.mark.parametrize('expires', ['candidate', 'observation', 'market_close', 'weather_window'])
+@pytest.mark.parametrize('delay_at', ['fee_lookup', 'final_gate'])
+def test_slow_preflight_cannot_submit_expired_intent(tmp_path, monkeypatch, expires, delay_at):
+    from datetime import timedelta
+    ex, client, paper, live, settings = setup(tmp_path, monkeypatch)
+    start = datetime.now(timezone.utc)
+    clock = [start]
+
+    class Clock:
+        @staticmethod
+        def now(tz):
+            return clock[0]
+
+        @staticmethod
+        def fromisoformat(value):
+            return datetime.fromisoformat(value)
+
+    monkeypatch.setattr('src.execution.live_executor.datetime', Clock)
+    spec = SimpleNamespace(tradeable=True, city='Austin',
+        observation_window_end=start+timedelta(hours=2),
+        last_trading_time=start+timedelta(hours=2))
+    monkeypatch.setattr('src.execution.live_executor.parse_settlement_spec', lambda raw: spec)
+    with paper.transaction() as c:
+        c.execute('UPDATE research_candidates SET captured_at=?,observation_age=?',
+                  (start.isoformat(), 7190 if expires=='observation' else 60))
+    if expires=='market_close': spec.last_trading_time=start+timedelta(seconds=10)
+    if expires=='weather_window': spec.observation_window_end=start+timedelta(seconds=10)
+    delay = 61 if expires=='candidate' else 11
+    if delay_at=='fee_lookup':
+        original = client.get_event_fee_changes
+        def delayed(**kw):
+            clock[0] += timedelta(seconds=delay)
+            return original(**kw)
+        client.get_event_fee_changes = delayed
+    else:
+        original = ex._gate
+        def delayed_gate():
+            result = original()
+            with live.connect() as c:
+                reserved = c.execute("SELECT 1 FROM orders WHERE status='submitting'").fetchone()
+            if reserved:
+                clock[0] += timedelta(seconds=delay)
+            return result
+        monkeypatch.setattr(ex, '_gate', delayed_gate)
+    with pytest.raises(RuntimeError, match='uncertain'):
+        submit(ex)
+    assert not client.calls
+    with pytest.raises(RuntimeError, match='duplicate'):
+        submit(ex)
+
+
+@pytest.mark.parametrize('age', [-1, float('inf')])
+def test_invalid_observation_age_blocks_submission(tmp_path, monkeypatch, age):
+    ex,client,paper,live,settings=setup(tmp_path,monkeypatch)
+    with paper.transaction() as c:
+        c.execute('UPDATE research_candidates SET observation_age=?',(age,))
+    with pytest.raises(RuntimeError,match='stale'):
+        submit(ex)
+    assert not client.calls

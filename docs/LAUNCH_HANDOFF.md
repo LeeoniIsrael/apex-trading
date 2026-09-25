@@ -72,3 +72,22 @@ existing branch if it is cleaned up. Original iCloud-backed checkout can contain
 dataless files. Use SSH root@178.156.159.178 with the existing id_rsa identity,
 IdentitiesOnly, BatchMode and StrictHostKeyChecking; never print key contents or
 environment secrets. No delegated agents are authorized by this handoff.
+
+## Daily follow-up — 2026-09-25
+
+The cached report stamped 18:03 UTC showed 9,965 useful v3 snapshots and zero
+independent resolved holdout events. Historical realized paper P&L was $977.02;
+this is not current-model independent evidence. The drawdown and production
+verification blockers remain. No deposit is requested.
+
+Prepared an inactive-live-path timing fix: candidate age, observation age, market
+close and weather-window end are rechecked using a fresh clock immediately before
+POST, after all potentially slow account/fee checks. Tests advance the clock during
+fee lookup and the final gate and confirm zero order calls, with attempted IDs
+remaining reserved. Invalid negative/nonfinite observation ages also fail closed.
+This conservative path still marks a post-reservation failure unknown and requires
+reconciliation; it does not silently retry an expired intent.
+
+This follow-up does not deploy or enable live trading, write production verification
+passes, change the model cohort, or adjust risk limits. Paper and Telegram services
+remain active. Include this prepared fix in the next reviewed deployment.
