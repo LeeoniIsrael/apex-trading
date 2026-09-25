@@ -273,3 +273,13 @@ new entries while retaining research, instead of overshooting or repeatedly
 raising an expected risk error. Conservative per-cycle reservations reset on the
 next actual account audit. 219 tests pass. The current $1.9824 entry nearly uses
 the $2 daily cash budget; this is not a realized trading loss.
+
+## Optional daily-budget increase prepared, not activated
+
+User requested raising $2 to $5; context interpreted as the daily cash budget,
+not per-order size. Updated the experimental profile's allowed daily ceiling to
+$5 while preserving the default of $2, per-order $2 and total exposure $10. All
+220 tests pass. Operator-only `ops/apply-daily-budget-5.sh` is syntax-checked but
+has NOT been executed. Stage it outside the running import path together with
+the updated weather_config.py. The live environment was read-only verified at
+$2/day; this preparation does not apply the increase or restart the live worker.

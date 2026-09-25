@@ -64,3 +64,12 @@ Telegram `/status` must then explicitly say real money. `/pause` stops new
 orders; `/emergency_stop` also removes the enablement marker. Existing positions
 remain at risk after stopping. If either service fails or the account cannot be
 reconciled, stop and investigate rather than retrying orders or resetting history.
+
+## Optional operator-selected $5 daily cash budget
+
+At the operator's request, prepared support for a $5 daily budget, keeping $2
+per order and $10 total exposure. Default remains $2/day. The running environment
+was not changed by preparation. The staged operator-only script validates the
+expected current code/config, backs up both files, sets the daily limit and
+restarts the worker. It does not reset spending, clear pauses or alter markers.
+The script must be explicitly run by the operator with `--apply`.

@@ -55,7 +55,7 @@ class WeatherSettings(BaseSettings):
     def enforce_live_gate(self) -> "WeatherSettings":
         if self.live_validation_profile == 'experimental_100':
             ceilings = {'live_max_order_usd':2, 'live_max_exposure_usd':10,
-                        'live_max_city_exposure_usd':5, 'live_max_daily_loss_usd':2,
+                        'live_max_city_exposure_usd':5, 'live_max_daily_loss_usd':5,
                         'live_max_drawdown':.10, 'live_max_open_positions':3,
                         'live_max_daily_orders':10}
             if any(getattr(self, name)>limit for name,limit in ceilings.items()):

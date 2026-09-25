@@ -17,11 +17,22 @@ def test_research_waiver_never_waives_unknown_or_technical_failures():
 
 
 @pytest.mark.parametrize('field,value',[('live_max_order_usd',2.01),('live_max_exposure_usd',10.01),
-    ('live_max_city_exposure_usd',5.01),('live_max_daily_loss_usd',2.01),('live_max_drawdown',.101),
+    ('live_max_city_exposure_usd',5.01),('live_max_daily_loss_usd',5.01),('live_max_drawdown',.101),
     ('live_max_open_positions',4),('live_max_daily_orders',11),('live_balance_floor_usd',19)])
 def test_experimental_limits_cannot_expand(field,value):
     with pytest.raises(ValueError):
         WeatherSettings(_env_file=None,live_validation_profile='experimental_100',**{field:value})
+
+
+def test_optional_five_dollar_daily_budget_preserves_other_caps():
+    default=WeatherSettings(_env_file=None,live_validation_profile='experimental_100')
+    selected=WeatherSettings(_env_file=None,live_validation_profile='experimental_100',
+                             live_max_daily_loss_usd=5)
+    assert default.live_max_daily_loss_usd==2
+    assert selected.live_max_daily_loss_usd==5
+    assert selected.live_max_order_usd==2
+    assert selected.live_max_exposure_usd==10
+    assert selected.trading_mode=='paper'
 
 
 def test_profile_cannot_reuse_validated_marker_or_waive_technical_failure(tmp_path,monkeypatch):
