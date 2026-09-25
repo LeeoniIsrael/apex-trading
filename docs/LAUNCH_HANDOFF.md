@@ -136,3 +136,29 @@ Changes are prepared locally and pushed; production deployment remains pending.
 User now explicitly requests considering an unproven $100 pilot before 200
 resolved events. The 200-event threshold is research policy, not an exchange
 requirement. It has not been waived in code, and the live marker remains absent.
+
+## Demo stop and notification checks — 2026-09-25
+
+User clarified that the newly funded account was Kalshi DEMO. Read-only production
+balance is still $0.2485; no real $100 deposit has been observed. Production is
+paper mode and has no live marker. Do not present the demo grant as real funding.
+
+Ran the actual `emergency-stop` CLI against the isolated demo and research SQLite
+files, using an explicit temporary test marker. Both databases durably latched
+pause and emergency stop, and the marker was removed. Reopening both databases
+kept status stopped; Telegram `/resume` refused activation. Order count remained
+two. Demo state intentionally remains stopped after testing.
+
+Rendered the actual demo fill through LiveAlertQueue, explicitly replaced the
+real-money heading with `DEMO TEST — pretend money`, and delivered it to the
+operator's configured Telegram chat. Telegram acknowledged message 47. Only then
+was delivery marked in the demo database. Reopening the queue suppressed repeat
+delivery. Production database verification flags were not changed. This proves
+the particular demo fill notification and durable acknowledgement, not receipt
+by the human or every production alert type.
+
+Evidence is appended to the same private local demo report. The full autonomous
+service-to-exchange path, real settlement lifecycle, production deployment of the
+latest changes, and chosen validation/pilot policy remain outstanding. Existing
+isolated unit tests and these demo checks must not be described as full unattended
+real-money launch readiness. No production activation or order was performed.
