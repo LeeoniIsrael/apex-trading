@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from datetime import datetime, time, timedelta, timezone
 
@@ -170,9 +171,23 @@ class ConversationAssistant:
                 "SELECT COALESCE(SUM(realized_pnl_usd),0) FROM positions WHERE contracts=0"
             ).fetchone()[0])
             latest = connection.execute(
-                "SELECT ticker,side,contracts,average_price_cents FROM positions WHERE contracts>0 ORDER BY updated_at DESC LIMIT 5"
+                "SELECT p.ticker,p.side,p.contracts,p.average_price_cents,m.raw_json,ss.spec_json "
+                "FROM positions p LEFT JOIN markets m ON m.ticker=p.ticker "
+                "LEFT JOIN settlement_specs ss ON ss.ticker=p.ticker "
+                "WHERE p.contracts>0 ORDER BY p.updated_at DESC LIMIT 5"
             ).fetchall()
-        positions = [f"{r['ticker']} {r['side']} x{r['contracts']} at {r['average_price_cents']:.1f}c" for r in latest]
+        positions = []
+        for row in latest:
+            market = json.loads(row["raw_json"]) if row["raw_json"] else {}
+            spec = json.loads(row["spec_json"]) if row["spec_json"] else {}
+            positions.append({
+                "city": spec.get("city", "Unknown city"),
+                "market_question": market.get("title", "Unknown weather outcome"),
+                "side": row["side"],
+                "contracts": row["contracts"],
+                "price_cents": row["average_price_cents"],
+                "dollars_at_risk": round(float(row["contracts"]) * float(row["average_price_cents"]) / 100, 2),
+            })
         return (f"UTC={now.isoformat()}; mode=paper; bankroll=${self.bankroll:.2f}; "
                 f"filled_trades_today={orders}; open_positions={open_count}; exposure=${float(exposure):.2f}; "
                 f"realized_pnl_all_time=${realized:.2f}; latest_positions={positions}")
@@ -189,8 +204,9 @@ class ConversationAssistant:
                     "You are the user's private paper-trading status assistant. Answer only from the supplied "
                     "live snapshot. Write for a middle-schooler: always use 2 to 5 very short bullet points, "
                     "with each bullet no more than 16 words. Use everyday words, not ticker codes or trading jargon. "
-                    "When describing a position, say the city if recognizable, explain NO as 'betting it will not happen' "
-                    "and YES as 'betting it will happen', and say the dollar amount at risk when available. Always call "
+                    "When describing a position, use the supplied city exactly; never guess a city from a ticker. For NO, "
+                    "say plainly: 'We bet [city]'s lowest temperature will NOT be [the temperature range from market_question].' "
+                    "For YES, say it WILL be that range. State the dollar amount at risk when available. Always call "
                     "this pretend money or paper trading, never real money. Never predict returns, invent data, or offer "
                     "to place/change trades. If the snapshot cannot answer, say so simply in bullets."
                 )},
