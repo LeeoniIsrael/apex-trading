@@ -114,7 +114,7 @@ class CostTracker:
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         monthly_infrastructure = self.total_since("infrastructure", month_start)
         if since is None:
-            infrastructure = monthly_infrastructure
+            infrastructure = self.total("infrastructure")
         else:
             period_days = max(1.0, (now - since.astimezone(timezone.utc)).total_seconds() / 86400)
             infrastructure = monthly_infrastructure * min(

@@ -46,3 +46,34 @@ The optional runtime exception reviewer uses GPT-6 Luna structured outputs only
 inside a configured forecast-disagreement band. It receives compact, non-secret
 diagnostics—not credentials or private keys—and can only add veto codes. API
 failure, schema failure and exhausted shared AI budgets all fail closed.
+
+## Version 1 prospective experiments
+
+`research_candidates` records executable price, depth, spread, side, fee-adjusted
+edge, observation age, forecast surprise and disagreement, city/station/source,
+time stratum, Jev action, control assignment, linked order and worst observed bid.
+Join its ticker to `settlements` for the official outcome; `apex-weather accounting`
+replays actual fills to report each entry order's closed quantity and realized P&L.
+Maximum observed adverse movement is `MAX(0, price_cents - min_bid_cents)`;
+missing observations are unknown, not evidence of no adverse movement.
+
+The fixed `apex-experiment-v1` event hash assigns 20% to holdout and a disjoint
+10% to no-trade control. A city/station/source/day stays together, including
+sibling temperature ranges and high/low contracts. Readiness takes the first
+qualifying candidate per event; arm reports use the first per ticker and are
+not independent-event significance tests. Never tune against holdout results.
+Freeze a new experiment/model version and collect new future data when changing
+thresholds. Existing historical predictions are not retroactively holdout data.
+
+`apex-weather research` compares baseline, fresh-observation lag (observation
+under five minutes old, probability change at least five points, smaller price
+change), early/midday/near-close entry, price buckets, separate sources, fixed
+no-trade control and Jev veto outcomes. These are observational comparisons,
+not proof of causality. Hypothetical P&L assumes available quoted depth; it is
+reported separately from actual fills. No thresholds were loosened.
+
+Paper trading now holds positions to official settlement. The former early-exit
+simulation assumed unlimited bid depth and could charge historical fees again;
+it is disabled pending a depth-aware FIFO exit implementation. Missing or stale
+bids have zero liquidation value in conservative equity reporting. Starting
+bankroll remains the risk ceiling even if paper equity increases.

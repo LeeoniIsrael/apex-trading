@@ -133,6 +133,32 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     CREATE INDEX IF NOT EXISTS idx_benchmarks_ticker_time
         ON decision_benchmarks(ticker, decided_at);
     """),
+    (4, """
+    CREATE TABLE IF NOT EXISTS research_candidates (
+        id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, event_key TEXT NOT NULL,
+        captured_at TEXT NOT NULL, split TEXT NOT NULL, model_version TEXT NOT NULL,
+        side TEXT NOT NULL, price_cents REAL NOT NULL, contracts INTEGER NOT NULL,
+        fee_usd REAL NOT NULL, probability REAL NOT NULL, net_ev_usd REAL NOT NULL,
+        baseline_action TEXT NOT NULL, final_action TEXT NOT NULL, jev_action TEXT,
+        source TEXT NOT NULL, station TEXT NOT NULL, city TEXT NOT NULL,
+        market_type TEXT NOT NULL, price_bucket TEXT NOT NULL, time_bucket TEXT NOT NULL,
+        seconds_to_close REAL NOT NULL, observation_age REAL NOT NULL,
+        surprise_f REAL, forecast_disagreement_f REAL, spread_cents REAL,
+        liquidity INTEGER NOT NULL, probability_change REAL, lag_candidate INTEGER NOT NULL,
+        order_id TEXT, min_bid_cents REAL, control INTEGER NOT NULL,
+        UNIQUE(ticker,captured_at)
+    );
+    CREATE TABLE IF NOT EXISTS equity_history (
+        captured_at TEXT PRIMARY KEY, equity REAL NOT NULL, drawdown REAL NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS verification_checks (
+        name TEXT PRIMARY KEY, passed INTEGER NOT NULL, checked_at TEXT NOT NULL,
+        details TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS notification_deliveries (
+        event_key TEXT PRIMARY KEY, sent_at TEXT NOT NULL
+    );
+    """),
 )
 
 

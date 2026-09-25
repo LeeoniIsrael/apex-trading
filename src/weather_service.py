@@ -21,6 +21,8 @@ from src.kalshi.client import KalshiClientV2
 from src.kalshi.orderbook import parse_orderbook
 from src.monitoring.costs import CostTracker
 from src.research.collector import MarketCollector
+from src.research.accounting import paper_account
+from src.research.experiments import record_candidate
 from src.research.settlements import SettlementReconciler
 from src.risk.exposure import RiskPolicy, RiskState, risk_blocks
 from src.risk.sizing import SizingLimits, size_contracts
@@ -314,15 +316,15 @@ class WeatherService:
             float(row["realized_pnl_usd"]) for row in position_rows
             if str(row["updated_at"]).startswith(today_prefix)
         )
-        equity = peak_equity = self.settings.bankroll
-        drawdown = 0.0
-        for row in sorted(position_rows, key=lambda item: str(item["updated_at"])):
-            if row["contracts"] > 0:
-                continue
-            equity += float(row["realized_pnl_usd"])
-            peak_equity = max(peak_equity, equity)
-            if peak_equity > 0:
-                drawdown = max(drawdown, (peak_equity - equity) / peak_equity)
+        account = paper_account(self.database, self.settings.bankroll, now=now)
+        drawdown = account.max_drawdown
+        daily_pnl = account.daily_pnl
+        with self.database.transaction() as connection:
+            connection.execute("INSERT OR REPLACE INTO equity_history VALUES(?,?,?)",
+                               (now.isoformat(), account.equity, drawdown))
+        if account.discrepancies:
+            self._record_health("error", "accounting", "ledger_discrepancy", ",".join(account.discrepancies))
+            return {"markets": len(specs), "predictions": 0, "decisions": 0, "paper_orders": 0}
         predictions = decisions = paper_orders = 0
 
         for spec in current_specs:
@@ -402,7 +404,7 @@ class WeatherService:
                     executable_bid_cents=bid,
                     fee_rate=fee_rate,
                 )
-                if exit_eval.should_exit and bid is not None:
+                if exit_eval.should_exit and bid is not None and self.live is not None:
                     exit_client_id = str(uuid.uuid4())
                     if self.live is not None:
                         self.live.submit_order(
@@ -459,7 +461,7 @@ class WeatherService:
                 continue
             contracts = size_contracts(
                 probability=side_probability, price_cents=best_ask,
-                limits=SizingLimits(bankroll_usd=self.settings.bankroll),
+                limits=SizingLimits(bankroll_usd=max(.01, min(self.settings.bankroll, account.equity))),
                 current_total_exposure_usd=total_exposure, calibration_quality=0,
             )
             if contracts <= 0:
@@ -475,7 +477,7 @@ class WeatherService:
                     city_exposure.get(spec.city or "unknown", 0.0),
                     daily_pnl, drawdown,
                 ),
-                RiskPolicy(bankroll_usd=self.settings.bankroll), exposure,
+                RiskPolicy(bankroll_usd=max(.01, min(self.settings.bankroll, account.equity))), exposure,
             )
             confidence = max(0.0, 1.0 - estimate.entropy_bits)
             external_vetoes: tuple[str, ...] = ()
@@ -504,7 +506,8 @@ class WeatherService:
                     )
             decision = decide(
                 settlement=spec, edge=edge,
-                data_stale=(forecast.is_stale(now, timedelta(hours=8))
+                data_stale=(not 0 <= (now - max(item.observed_at_utc for item in observations)).total_seconds() <= 7200
+                            or forecast.is_stale(now, timedelta(hours=8))
                             or nws_forecast.is_stale(now, timedelta(hours=3))),
                 data_conflict=data_conflict,
                 model_confidence=confidence,
@@ -582,6 +585,24 @@ class WeatherService:
                      json.dumps({"jev_bypassed_obvious": self.jev is not None
                                  and edge.gross_edge >= self.settings.jev_obvious_edge})),
                 )
+            latest_observation = max(item.observed_at_utc for item in observations)
+            latest_temperature = next((item.temperature_f for item in sorted(observations, key=lambda x:x.observed_at_utc, reverse=True) if item.temperature_f is not None), None)
+            forecast_points = [point for member in forecast.members for point in member]
+            predicted_temperature = (min(forecast_points, key=lambda p:abs((p.valid_at_utc-latest_observation).total_seconds())).temperature_f if forecast_points else None)
+            with self.database.connect() as connection:
+                prior = connection.execute("SELECT probability,price_cents,observation_age,captured_at FROM research_candidates WHERE ticker=? AND side=? ORDER BY id DESC LIMIT 1", (spec.ticker, side)).fetchone()
+            new_observation = prior and latest_observation > datetime.fromisoformat(prior['captured_at'])-timedelta(seconds=prior['observation_age'])
+            control = record_candidate(
+                self.database, spec=spec, now=now, side=side, edge=edge,
+                baseline=deterministic_action, final=decision.action.value, jev=jev_action,
+                observation_age=(now-latest_observation).total_seconds(),
+                surprise=latest_temperature-predicted_temperature if latest_temperature is not None and predicted_temperature is not None else None,
+                disagreement=forecast_disagreement,
+                probability_change=side_probability-prior['probability'] if new_observation else None,
+                book_change=(edge.executable_price_cents-prior['price_cents'])/100 if new_observation else None,
+                latest_bid=book.best_bid(side))
+            if control:
+                continue
             if decision.action.value not in {"BUY_YES", "BUY_NO"}:
                 continue
             client_order_id = str(uuid.uuid4())
@@ -607,6 +628,7 @@ class WeatherService:
             open_tickers.add(spec.ticker)
             order_id = f"PAPER-{client_order_id}"
             with self.database.transaction() as connection:
+                connection.execute("UPDATE research_candidates SET order_id=? WHERE ticker=? AND captured_at=?", (order_id, spec.ticker, now.isoformat()))
                 connection.execute(
                     "INSERT INTO orders(id,client_order_id,ticker,side,action,price_cents,contracts," 
                     "filled_contracts,status,paper,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",

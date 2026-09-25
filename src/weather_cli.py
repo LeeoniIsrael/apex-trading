@@ -18,55 +18,8 @@ from src.weather_config import WeatherSettings
 def _readiness(
     database: Database, bankroll: float = 100.0,
 ) -> tuple[bool, tuple[str, ...], ReadinessEvidence]:
-    with database.connect() as connection:
-        snapshots = connection.execute("SELECT COUNT(*) FROM market_snapshots").fetchone()[0]
-        resolved = connection.execute("SELECT COUNT(*) FROM settlements WHERE final=1").fetchone()[0]
-        parser_failures = connection.execute(
-            "SELECT COUNT(*) FROM health_events WHERE code='settlement_parser_failure'"
-        ).fetchone()[0]
-        incidents = connection.execute(
-            "SELECT COUNT(*) FROM health_events WHERE severity IN ('error','critical')"
-        ).fetchone()[0]
-        decision_rows = connection.execute(
-            "SELECT action,edge_json FROM decisions WHERE edge_json IS NOT NULL"
-        ).fetchall()
-        realized_pnl = connection.execute(
-            "SELECT COALESCE(SUM(realized_pnl_usd),0) FROM positions"
-        ).fetchone()[0]
-        prediction_rows = connection.execute(
-            "SELECT probability,eventual_outcome FROM model_predictions "
-            "WHERE eventual_outcome IN (0,1)"
-        ).fetchall()
-        pnl_rows = connection.execute(
-            "SELECT realized_pnl_usd FROM positions WHERE contracts=0 "
-            "ORDER BY updated_at,ticker,side"
-        ).fetchall()
-    brier = None
-    if prediction_rows:
-        brier = sum((row[0] - row[1]) ** 2 for row in prediction_rows) / len(prediction_rows)
-    net_ev = 0.0
-    for action, edge_json in decision_rows:
-        if action in {"BUY_YES", "BUY_NO"}:
-            net_ev += float(json.loads(edge_json).get("net_ev_usd", 0))
-    equity = peak = bankroll
-    max_drawdown = 0.0
-    for row in pnl_rows:
-        equity += float(row[0])
-        peak = max(peak, equity)
-        if peak > 0:
-            max_drawdown = max(max_drawdown, (peak - equity) / peak)
-    evidence = ReadinessEvidence(
-        market_snapshots=snapshots,
-        resolved_markets=resolved,
-        brier_score=brier,
-        net_ev_usd=net_ev,
-        realized_paper_pnl_usd=float(realized_pnl),
-        max_drawdown_pct=max_drawdown,
-        unresolved_parser_failures=parser_failures,
-        major_data_incidents=incidents,
-    )
-    ready, failures = evaluate_readiness(evidence, ReadinessPolicy())
-    return ready, failures, evidence
+    from src.research.readiness import database_readiness
+    return database_readiness(database, bankroll)
 
 
 def main() -> int:
@@ -76,6 +29,8 @@ def main() -> int:
     sub.add_parser("discover")
     sub.add_parser("health")
     sub.add_parser("readiness")
+    sub.add_parser("research")
+    sub.add_parser("accounting")
     sub.add_parser("run-once")
     enable = sub.add_parser("enable-live")
     enable.add_argument("--confirm", required=True)
@@ -85,6 +40,12 @@ def main() -> int:
     database = Database(settings.database_path)
     database.migrate()
 
+    if args.command in {"research", "accounting"}:
+        from src.research.accounting import paper_account
+        from src.research.experiments import report
+        result = report(database, settings.bankroll) if args.command == "research" else asdict(paper_account(database, settings.bankroll))
+        print(json.dumps(result, default=str))
+        return 0
     if args.command == "init-db":
         print(json.dumps({"database": str(settings.database_path), "integrity": database.integrity_check()}))
         return 0

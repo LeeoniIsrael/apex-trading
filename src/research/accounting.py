@@ -39,6 +39,7 @@ def paper_account(database: Database, bankroll: float, *, now: datetime | None =
         settlements = c.execute("SELECT * FROM settlements WHERE final=1").fetchall()
         costs = c.execute("SELECT * FROM costs ORDER BY incurred_at,id").fetchall()
         positions = c.execute("SELECT * FROM positions").fetchall()
+        historical = c.execute("SELECT COALESCE(MAX(drawdown),0) FROM equity_history").fetchone()[0]
         books = c.execute("SELECT * FROM orderbook_snapshots ORDER BY captured_at,id").fetchall()
     events = [(f['filled_at'], 0, f) for f in fills]
     events += [(s['settled_at'], 1, s) for s in settlements]
@@ -123,7 +124,7 @@ def paper_account(database: Database, bankroll: float, *, now: datetime | None =
             if not quantity:
                 break
     equity = cash + marked
-    drawdown = max(drawdown, (peak-equity)/peak)
+    drawdown = max(drawdown, historical, (peak-equity)/peak)
     return PaperAccount(bankroll, round(realized, 4), round(open_cost, 4), round(fees, 4),
                         round(operating, 4), round(cash, 4), round(equity, 4),
                         round(realized-operating, 4), drawdown, daily_pnl,
