@@ -8,6 +8,8 @@ import os
 from datetime import datetime, time, timedelta, timezone
 
 from src.monitoring.costs import CostTracker
+from src.research.accounting import paper_account
+from src.monitoring.alerts import AlertQueue, describe_market
 from src.research.calibration import calibration_metrics
 from src.storage.database import Database
 
@@ -26,70 +28,35 @@ class TelegramController:
             )
 
     def handle(self, command: str) -> str:
-        command = command.strip().split()[0].lower()
+        command = command.strip().split()[0].lower() if command.strip() else "/status"
         with self.database.connect() as connection:
             if command == "/status":
                 controls = dict(connection.execute(
                     "SELECT key,value FROM control_state"
                 ).fetchall())
-                exposure = float(connection.execute(
-                    "SELECT COALESCE(SUM(contracts*average_price_cents/100.0),0) "
-                    "FROM positions WHERE contracts>0"
-                ).fetchone()[0])
+                a = paper_account(self.database, self.bankroll)
                 state = ("EMERGENCY" if controls.get("emergency_stop") == "true" else
                          "PAUSED" if controls.get("paused") == "true" else "RUNNING")
-                return (f"APEX PAPER | {state} | bankroll ${self.bankroll:.2f} | "
-                        f"open exposure ${exposure:.2f}")
+                return (f"• Paper money only. System: {state}.\n"
+                        f"• Starting bankroll: ${a.starting_bankroll:.2f}. Current paper equity: ${a.equity:.2f}.\n"
+                        f"• Open position cost: ${a.open_cost:.2f}. Cash: ${a.cash:.2f}.\n"
+                        f"• Realized profit/loss: ${a.realized_pnl:.2f}. After operating costs: ${a.after_cost_result:.2f}.\n"
+                        "• YES means the weather outcome happens. NO means it does not.")
             if command == "/today":
-                today = datetime.now(timezone.utc).date().isoformat()
-                orders = connection.execute(
-                    "SELECT COUNT(*) FROM orders WHERE created_at LIKE ?", (f"{today}%",)
-                ).fetchone()[0]
-                outcomes = connection.execute(
-                    "SELECT SUM(realized_pnl_usd>0),SUM(realized_pnl_usd<0) FROM positions "
-                    "WHERE contracts=0 AND updated_at LIKE ?", (f"{today}%",)
-                ).fetchone()
-                exposure = float(connection.execute(
-                    "SELECT COALESCE(SUM(contracts*average_price_cents/100.0),0) "
-                    "FROM positions WHERE contracts>0"
-                ).fetchone()[0])
-                largest = float(connection.execute(
-                    "SELECT COALESCE(MAX(contracts*average_price_cents/100.0),0) "
-                    "FROM positions WHERE contracts>0"
-                ).fetchone()[0])
-                prediction_rows = connection.execute(
-                    "SELECT probability,eventual_outcome FROM model_predictions "
-                    "WHERE eventual_outcome IN (0,1)"
-                ).fetchall()
-                errors = connection.execute(
-                    "SELECT COUNT(*) FROM health_events WHERE severity IN ('error','critical') "
-                    "AND occurred_at LIKE ?", (f"{today}%",)
-                ).fetchone()[0]
-                metrics = calibration_metrics(
-                    [(float(r[0]), int(r[1])) for r in prediction_rows]
-                )
-                calibration = ("INSUFFICIENT DATA" if metrics.samples < 30
-                               else f"Brier {metrics.brier_score:.3f} n={metrics.samples}")
-                report = CostTracker(self.database).report(
-                    datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-                )
-                return (
-                    f"DAILY | bankroll ${self.bankroll:.2f} | gross ${report.gross_trading_pnl_usd:.2f} "
-                    f"| fees ${report.trading_fees_usd:.2f} | infra/API "
-                    f"${report.infrastructure_usd + report.ai_api_usd + report.other_api_usd:.2f} "
-                    f"| net ${report.net_pnl_usd:.2f} | trades {orders} | "
-                    f"W/L {int(outcomes[0] or 0)}/{int(outcomes[1] or 0)} | exposure ${exposure:.2f} "
-                    f"| largest ${largest:.2f} | calibration {calibration} | "
-                    f"health {'OK' if not errors else f'{errors} errors'}"
-                )
+                a=paper_account(self.database,self.bankroll)
+                return (f"• Paper money. Starting bankroll: ${a.starting_bankroll:.2f}; equity: ${a.equity:.2f}.\n"
+                        f"• Today's realized profit/loss: ${a.daily_pnl:.2f}. Open cost: ${a.open_cost:.2f}.\n"
+                        f"• All-time realized result: ${a.realized_pnl:.2f}; after costs: ${a.after_cost_result:.2f}.\n"
+                        f"• Fees: ${a.fees:.2f}; infrastructure/API: ${a.operating_costs:.2f}.\n"
+                        "• Results include fees, not gross profit. This sample does not prove future profits.")
             if command == "/positions":
-                rows = connection.execute(
-                    "SELECT ticker,side,contracts,average_price_cents FROM positions WHERE contracts != 0"
-                ).fetchall()
-                return "No open paper positions." if not rows else "\n".join(
-                    f"{r['ticker']} {r['side'].upper()} x{r['contracts']} @ {r['average_price_cents']:.1f}c"
-                    for r in rows[:20]
-                )
+                rows=connection.execute('SELECT p.*,m.raw_json FROM positions p LEFT JOIN markets m ON m.ticker=p.ticker WHERE p.contracts>0 LIMIT 3').fetchall()
+                lines=['• Paper money. YES means it happens; NO means it does not.']
+                for r in rows:
+                    city,bet=describe_market(r['raw_json'],r['side'])
+                    lines.append(f"• {city}. {bet}. Cost: ${r['contracts']*r['average_price_cents']/100:.2f}.")
+                if not rows: lines.append('• No open paper positions.')
+                return '\n'.join(lines)
             if command == "/weather":
                 rows = connection.execute(
                     "SELECT station_id,MAX(observed_at_utc) AS latest FROM weather_observations "
@@ -108,7 +75,7 @@ class TelegramController:
                 return f"remaining-day-v1 | Monte Carlo predictions: {count}"
             if command == "/calibration":
                 rows = connection.execute(
-                    "SELECT probability,eventual_outcome FROM model_predictions WHERE eventual_outcome IN (0,1)"
+                    "SELECT probability,eventual_outcome FROM model_predictions WHERE eventual_outcome IN (0,1) AND id IN (SELECT MIN(id) FROM model_predictions GROUP BY ticker)"
                 ).fetchall()
                 metrics = calibration_metrics([(float(r[0]), int(r[1])) for r in rows])
                 return ("Calibration: INSUFFICIENT DATA" if metrics.samples < 30 else
@@ -146,78 +113,71 @@ class TelegramController:
 
 
 class ConversationAssistant:
-    """Small, read-only natural-language layer over the live trading database."""
-
-    def __init__(self, database: Database, api_key: str, bankroll: float) -> None:
+    """AI selects a read-only topic; all displayed facts are rendered from SQLite."""
+    def __init__(self, database, api_key, bankroll, *, client=None):
         from openai import OpenAI
-        self.database = database
-        self.client = OpenAI(api_key=api_key, timeout=12, max_retries=1)
-        self.bankroll = bankroll
+        self.database, self.bankroll = database, bankroll
+        self.client = client or OpenAI(api_key=api_key, timeout=12, max_retries=0)
         self.model = os.getenv("TELEGRAM_CHAT_MODEL", "gpt-6-luna")
         self.daily_cap = float(os.getenv("TELEGRAM_CHAT_DAILY_USD", "0.05"))
         self.monthly_cap = float(os.getenv("TELEGRAM_CHAT_MONTHLY_USD", "1.00"))
+        # Operators must configure verified model-specific rates; unknown pricing fails closed.
+        self.input_rate = float(os.getenv("TELEGRAM_INPUT_USD_PER_MILLION", "0"))
+        self.output_rate = float(os.getenv("TELEGRAM_OUTPUT_USD_PER_MILLION", "0"))
 
-    def _snapshot(self) -> str:
-        now = datetime.now(timezone.utc)
-        today = now.date().isoformat()
-        with self.database.connect() as connection:
-            orders = int(connection.execute(
-                "SELECT COUNT(*) FROM orders WHERE created_at LIKE ? AND filled_contracts>0", (f"{today}%",)
-            ).fetchone()[0])
-            open_count, exposure = connection.execute(
-                "SELECT COUNT(*),COALESCE(SUM(contracts*average_price_cents/100.0),0) FROM positions WHERE contracts>0"
-            ).fetchone()
-            realized = float(connection.execute(
-                "SELECT COALESCE(SUM(realized_pnl_usd),0) FROM positions WHERE contracts=0"
-            ).fetchone()[0])
-            latest = connection.execute(
-                "SELECT p.ticker,p.side,p.contracts,p.average_price_cents,m.raw_json,ss.spec_json "
-                "FROM positions p LEFT JOIN markets m ON m.ticker=p.ticker "
-                "LEFT JOIN settlement_specs ss ON ss.ticker=p.ticker "
-                "WHERE p.contracts>0 ORDER BY p.updated_at DESC LIMIT 5"
-            ).fetchall()
-        positions = []
-        for row in latest:
-            market = json.loads(row["raw_json"]) if row["raw_json"] else {}
-            spec = json.loads(row["spec_json"]) if row["spec_json"] else {}
-            positions.append({
-                "city": spec.get("city", "Unknown city"),
-                "market_question": market.get("title", "Unknown weather outcome"),
-                "side": row["side"],
-                "contracts": row["contracts"],
-                "price_cents": row["average_price_cents"],
-                "dollars_at_risk": round(float(row["contracts"]) * float(row["average_price_cents"]) / 100, 2),
-            })
-        return (f"UTC={now.isoformat()}; mode=paper; bankroll=${self.bankroll:.2f}; "
-                f"filled_trades_today={orders}; open_positions={open_count}; exposure=${float(exposure):.2f}; "
-                f"realized_pnl_all_time=${realized:.2f}; latest_positions={positions}")
+    def _snapshot(self):
+        from dataclasses import asdict
+        return json.dumps(asdict(paper_account(self.database, self.bankroll)))
 
-    def answer(self, question: str) -> str:
-        tracker = CostTracker(self.database)
-        reserve = 0.002
-        if not tracker.can_spend("other_api", reserve, daily_limit=self.daily_cap, monthly_limit=self.monthly_cap):
-            return "Chat budget is reached for now. Try /today for the live numbers."
-        response = self.client.responses.create(
-            model=self.model, reasoning={"effort": "none"},
-            input=[
-                {"role": "system", "content": (
-                    "You are the user's private paper-trading status assistant. Answer only from the supplied "
-                    "live snapshot. Write for a middle-schooler: always use 2 to 5 very short bullet points, "
-                    "with each bullet no more than 16 words. Use everyday words, not ticker codes or trading jargon. "
-                    "When describing a position, use the supplied city exactly; never guess a city from a ticker. For NO, "
-                    "say plainly: 'We bet [city]'s lowest temperature will NOT be [the temperature range from market_question].' "
-                    "For YES, say it WILL be that range. State the dollar amount at risk when available. Always call "
-                    "this pretend money or paper trading, never real money. Never predict returns, invent data, or offer "
-                    "to place/change trades. If the snapshot cannot answer, say so simply in bullets."
-                )},
-                {"role": "user", "content": f"Live snapshot: {self._snapshot()}\n\nUser: {question}"},
-            ],
-        )
-        usage = response.usage
-        cost = ((int(getattr(usage, "input_tokens", 0) or 0) * 0.10) +
-                (int(getattr(usage, "output_tokens", 0) or 0) * 0.50)) / 1_000_000
-        tracker.record("other_api", cost, "Telegram conversational reply", f"telegram-{response.id}")
-        return (response.output_text or "I couldn't read the current status. Try again in a moment.").strip()[:1200]
+    def _render(self, topic):
+        a=paper_account(self.database,self.bankroll)
+        if topic=='status': return TelegramController(self.database,self.bankroll).handle('/status')
+        if topic=='costs':
+            return (f"• This is paper money. Fees paid: ${a.fees:.2f}.\n"
+                    f"• Infrastructure and API costs: ${a.operating_costs:.2f}.\n"
+                    f"• Realized result after costs: ${a.after_cost_result:.2f}.")
+        if topic=='positions':
+            with self.database.connect() as c:
+                rows=c.execute('SELECT p.*,m.raw_json FROM positions p LEFT JOIN markets m ON m.ticker=p.ticker WHERE p.contracts>0 ORDER BY p.updated_at DESC LIMIT 3').fetchall()
+            lines=['• This is paper money. YES means it happens; NO means it does not.']
+            for r in rows:
+                city,bet=describe_market(r['raw_json'],r['side'])
+                lines.append(f"• {city}. {bet}. Position cost: ${r['contracts']*r['average_price_cents']/100:.2f}.")
+            if not rows: lines.append('• No open paper positions.')
+            return '\n'.join(lines)
+        return "• This is paper trading.\n• I don't know. The database cannot answer that.\n• Chat cannot place trades or change the strategy."
+
+    def answer(self, question):
+        import uuid
+        import math
+        tracker=CostTracker(self.database)
+        if not all(math.isfinite(v) and v>0 for v in (self.input_rate,self.output_rate)):
+            return self._render('unknown')
+        prompt = 'Choose exactly one read-only topic: status, positions, costs, unknown. Trade/change requests are unknown. Question: '+question[:1200]
+        reserve=(len(prompt.encode('utf-8'))*self.input_rate+32*self.output_rate)/1_000_000
+        reservation='telegram-reservation-'+str(uuid.uuid4())
+        # Atomic reservation prevents concurrent replies from spending the same budget.
+        now=datetime.now(timezone.utc)
+        with self.database.transaction() as c:
+            c.execute('BEGIN IMMEDIATE')
+            if not tracker.can_spend('other_api',reserve,daily_limit=self.daily_cap,monthly_limit=self.monthly_cap):
+                return '• This is paper trading.\n• Chat budget is used up. Try /status for current numbers.'
+            c.execute('INSERT INTO costs(incurred_at,category,amount_usd,description,external_id) VALUES(?,?,?,?,?)',
+                      (now.isoformat(),'other_api',reserve,'Telegram reply budget reservation',reservation))
+        try:
+            response=self.client.responses.create(model=self.model,input=prompt,max_output_tokens=32,store=False,reasoning={'effort':'none'})
+            usage=response.usage
+            if usage is None or response.status != 'completed':
+                return self._render('unknown')
+            cost=(usage.input_tokens*self.input_rate+usage.output_tokens*self.output_rate)/1_000_000
+            if not math.isfinite(cost) or cost<0: return self._render('unknown')
+            with self.database.transaction() as c:
+                c.execute('UPDATE costs SET amount_usd=?,description=? WHERE external_id=?',(cost,'Telegram reply measured usage',reservation))
+            topic=(response.output_text or '').strip().lower()
+            return self._render(topic if topic in {'status','positions','costs'} else 'unknown')
+        except Exception:
+            # Uncertain charges retain the reservation; errors never become trading instructions.
+            return "• This is paper trading.\n• I don't know right now. Try /status."
 
 
 def main() -> int:
@@ -234,14 +194,7 @@ def main() -> int:
     assistant = (ConversationAssistant(database, os.environ["OPENAI_API_KEY"], controller.bankroll)
                  if os.getenv("TELEGRAM_CONVERSATION_ENABLED", "false").lower() == "true"
                  and os.getenv("OPENAI_API_KEY") else None)
-    with database.connect() as connection:
-        latest_health_id = int(connection.execute(
-            "SELECT COALESCE(MAX(id),0) FROM health_events"
-        ).fetchone()[0])
-    alert_cursor = {"id": latest_health_id}
-    with database.connect() as connection:
-        trade_cursor = {"id": int(connection.execute("SELECT COALESCE(MAX(rowid),0) FROM orders").fetchone()[0])}
-        settlement_cursor = {"id": int(connection.execute("SELECT COALESCE(MAX(rowid),0) FROM settlements").fetchone()[0])}
+    alerts = AlertQueue(database)
 
     async def reply(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.effective_chat or str(update.effective_chat.id) != allowed_chat:
@@ -253,58 +206,21 @@ def main() -> int:
         if not update.effective_chat or str(update.effective_chat.id) != allowed_chat or not update.message:
             return
         if assistant is None:
-            await update.message.reply_text("Chat is not enabled yet. Use /today or /positions for now.")
+            await update.message.reply_text("• This is paper trading.\n• Chat is not enabled. Use /status or /positions.")
             return
-        await update.message.reply_text("Checking.")
         try:
             answer = await asyncio.to_thread(assistant.answer, update.message.text or "")
         except Exception:
-            answer = "I couldn't check that right now. Try again in a minute."
+            answer = "• This is paper trading.\n• I don't know right now. Try /status."
         await update.message.reply_text(answer)
 
     async def send_daily(context: ContextTypes.DEFAULT_TYPE) -> None:
         await context.bot.send_message(chat_id=allowed_chat, text=controller.handle("/today"))
 
-    async def send_important_health(context: ContextTypes.DEFAULT_TYPE) -> None:
-        with database.connect() as connection:
-            rows = connection.execute(
-                "SELECT id,severity,component,code,message FROM health_events "
-                "WHERE id>? AND severity IN ('error','critical') ORDER BY id LIMIT 10",
-                (alert_cursor["id"],),
-            ).fetchall()
-        for row in rows:
-            await context.bot.send_message(
-                chat_id=allowed_chat,
-                text=(f"APEX {str(row['severity']).upper()} | {row['component']} | "
-                      f"{row['code']} | {row['message']}")[:4000],
-            )
-            alert_cursor["id"] = int(row["id"])
-
-    async def send_trade_alerts(context: ContextTypes.DEFAULT_TYPE) -> None:
-        with database.connect() as connection:
-            orders = connection.execute(
-                "SELECT rowid,ticker,side,filled_contracts,price_cents,paper FROM orders "
-                "WHERE rowid>? AND filled_contracts>0 ORDER BY rowid", (trade_cursor["id"],)
-            ).fetchall()
-            settlements = connection.execute(
-                "SELECT s.rowid,s.ticker,COALESCE(SUM(p.realized_pnl_usd),0) pnl "
-                "FROM settlements s JOIN positions p ON p.ticker=s.ticker AND p.contracts=0 "
-                "WHERE s.rowid>? GROUP BY s.rowid,s.ticker ORDER BY s.rowid", (settlement_cursor["id"],)
-            ).fetchall()
-        for row in orders:
-            amount = float(row["filled_contracts"]) * float(row["price_cents"]) / 100
-            await context.bot.send_message(chat_id=allowed_chat, text=(
-                f"Paper trade: bought {str(row['side']).upper()} on {row['ticker']}.\n"
-                f"${amount:.2f} at {row['price_cents']}¢."
-            ))
-            trade_cursor["id"] = int(row["rowid"])
-        for row in settlements:
-            pnl = float(row["pnl"])
-            result = "WON" if pnl > 0 else "LOST" if pnl < 0 else "settled even"
-            await context.bot.send_message(chat_id=allowed_chat, text=(
-                f"Paper result: {result}.\n{row['ticker']} | {'+' if pnl > 0 else ''}${pnl:.2f}."
-            ))
-            settlement_cursor["id"] = int(row["rowid"])
+    async def send_alerts(context: ContextTypes.DEFAULT_TYPE) -> None:
+        for key, text in alerts.pending():
+            await context.bot.send_message(chat_id=allowed_chat, text=text)
+            alerts.delivered(key)
 
     application = Application.builder().token(token).build()
     application.add_handler(MessageHandler(filters.COMMAND, reply))
@@ -318,10 +234,7 @@ def main() -> int:
         send_daily, time=time(summary_hour, summary_minute, tzinfo=timezone.utc),
         name="daily-summary",
     )
-    application.job_queue.run_repeating(
-        send_important_health, interval=60, first=15, name="important-health-alerts",
-    )
-    application.job_queue.run_repeating(send_trade_alerts, interval=30, first=20, name="trade-alerts")
+    application.job_queue.run_repeating(send_alerts, interval=5, first=1, name="durable-alerts")
     application.run_polling(drop_pending_updates=True)
     return 0
 

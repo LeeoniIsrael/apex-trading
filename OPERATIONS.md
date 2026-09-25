@@ -48,3 +48,26 @@ health events; warnings remain queryable without generating noisy alerts.
 promotion gate passes. It only records enablement; switching `TRADING_MODE=live`
 is separate. Live startup reconciles Kalshi state before submitting orders; keep
 paper mode until the evidence gate and a code/operations review both pass.
+
+## Accounting, research, and communication verification
+
+Use `apex-weather accounting` for fill-based cash, fees, open cost, liquidation
+equity, realized/after-cost result, drawdown, order-level results, and discrepancies.
+Missing or >120-second-old bid data is valued at zero; this is a conservative
+liquidation estimate, not a claim that open contracts are worthless. Equity history
+preserves the worst observed drawdown. A discrepancy stops new paper orders and
+live promotion. Reconcile existing records before clearing a discrepancy.
+
+Telegram `/status` and `/today` display equity separately from starting bankroll.
+AI conversational replies only choose status/positions/costs/unknown; numbers and
+weather descriptions are deterministic database renderings. Unknown topics say
+“I don't know.” Verified input/output model prices are required for AI routing.
+No real API call is used in unit tests. The API call bounds output and durably
+reserves its worst-case budget before sending; uncertain charges remain reserved,
+following [OpenAI's spending-controller guidance](https://developers.openai.com/cookbook/articles/per_run_spending_controller_responses_api#check-the-budget-before-each-request).
+
+Alerts are checked every five seconds and persisted after successful delivery.
+This provides at-least-once delivery: a crash after Telegram accepts a message but
+before SQLite records it can repeat the alert. Old unsent fills can appear once
+when upgrading. Sending failures retain the event for retry. Actual end-to-end
+Telegram delivery must be verified on the server before recording readiness.
