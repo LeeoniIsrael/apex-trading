@@ -155,6 +155,17 @@ class ConversationAssistant:
         import math
         tracker=CostTracker(self.database)
         if not all(math.isfinite(v) and v>0 for v in (self.input_rate,self.output_rate)):
+            # Ordinary status questions remain useful without paid AI routing.
+            import re
+            words=set(re.findall(r"[a-z]+", question.lower()))
+            if words & {'buy','sell','place','change','enable','resume','pause'}:
+                return self._render('unknown')
+            if words & {'cost','costs','fees','expenses'}:
+                return self._render('costs')
+            if words & {'positions','bets','exposure','risk'}:
+                return self._render('positions')
+            if words & {'status','bankroll','balance','equity','profit','money','doing','hello','hi'}:
+                return self._render('status')
             return self._render('unknown')
         prompt = 'Choose exactly one read-only topic: status, positions, costs, unknown. Trade/change requests are unknown. Question: '+question[:1200]
         reserve=(len(prompt.encode('utf-8'))*self.input_rate+32*self.output_rate)/1_000_000

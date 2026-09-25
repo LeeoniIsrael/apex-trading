@@ -66,3 +66,12 @@ def test_status_reflects_equity_and_alerts_survive_restart(tmp_path):
     with db.transaction() as c:
         c.execute("INSERT INTO health_events(occurred_at,severity,component,code,message,details_json) VALUES('now','error','provider','fetch_failed','untrusted response','{}')")
     assert 'untrusted response' not in q.pending()[0][1]
+
+
+def test_status_questions_work_without_pricing_or_api_call(tmp_path,monkeypatch):
+    a,fake,db=assistant(tmp_path,monkeypatch)
+    a.input_rate=a.output_rate=0
+    assert 'Current paper equity' in a.answer('How much money do we have?')
+    assert 'Fees paid' in a.answer('What are our costs?')
+    assert "I don't know" in a.answer('Buy more positions')
+    assert not fake.calls
