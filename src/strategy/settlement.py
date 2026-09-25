@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import math
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from enum import StrEnum
@@ -127,19 +128,10 @@ def _thresholds(text: str, market: dict[str, Any]) -> tuple[float | None, float 
         if boundary == "low":
             return value, None, inclusive, False
         return None, value, False, inclusive
-    match = re.search(r"(-?\d+(?:\.\d+)?)\s*(?:to|through|[-–])\s*(-?\d+(?:\.\d+)?)", lowered)
+    match = re.search(r"(?:between\s+)?(-?\d+(?:\.\d+)?)\s*(?:to|through|and)\s*(-?\d+(?:\.\d+)?)", lowered)
     if match:
         return float(match.group(1)), float(match.group(2)), True, True
-    # Structured API strikes are a fallback once textual semantics fail.
-    floor = market.get("floor_strike")
-    cap = market.get("cap_strike")
-    if floor is not None or cap is not None:
-        try:
-            low = float(floor) if floor is not None else None
-            high = float(cap) if cap is not None else None
-            return low, high, True, True
-        except (TypeError, ValueError):
-            pass
+    # Strikes without explicit textual inclusivity are ambiguous.
     return None, None, False, False
 
 
@@ -173,6 +165,8 @@ def parse_settlement_spec(market: dict[str, Any]) -> SettlementSpec:
 
     hourly = bool(re.search(r"\b(hourly|at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|[A-Z]{2,4}))\b", rules, re.I))
     market_type = MarketType.HOURLY if hourly else MarketType.DAILY
+    if hourly:
+        flags.append("hourly_execution_not_supported")
     if re.search(r"\b(highest|maximum|max temperature)\b", lowered):
         measurement = Measurement.HIGH
     elif re.search(r"\b(lowest|minimum|min temperature)\b", lowered):
@@ -187,6 +181,8 @@ def parse_settlement_spec(market: dict[str, Any]) -> SettlementSpec:
     station_match = re.search(r"\bK[A-Z]{3}\b", rules)
     cli_id = cli_match.group(0).upper() if cli_match else None
     station_id = station_match.group(0).upper() if station_match else None
+    if station_id and cli_id and station_by_identifier(station_id) != station_by_identifier(cli_id):
+        flags.append("conflicting_station_identifiers")
     station = station_by_identifier(station_id or cli_id)
     if station and station_id is None:
         station_id = station.station_id
@@ -199,6 +195,12 @@ def parse_settlement_spec(market: dict[str, Any]) -> SettlementSpec:
     if market_day is None:
         flags.append("market_date_missing")
     low, high, inclusive_low, inclusive_high = _thresholds(rules, market)
+    if (any(v is not None and not math.isfinite(v) for v in (low, high))
+        or (low is not None and high is not None and low > high)):
+        flags.append("invalid_threshold")
+    rule_day = _market_date({}, rules)
+    if rule_day is not None and market_day != rule_day:
+        flags.append("conflicting_market_dates")
     if low is None and high is None:
         flags.append("threshold_missing")
 

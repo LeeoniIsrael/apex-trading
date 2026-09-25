@@ -81,14 +81,14 @@ class TelegramController:
                 return f"Database: {self.database.integrity_check()} | recorded errors: {errors}"
             if command == "/model":
                 count = connection.execute("SELECT COUNT(*) FROM model_predictions").fetchone()[0]
-                return f"remaining-day-v1 | Monte Carlo predictions: {count}"
+                from src.research.experiments import MODEL_VERSION
+                return f"{MODEL_VERSION} | Stored predictions across all versions: {count}"
             if command == "/calibration":
-                rows = connection.execute(
-                    "SELECT probability,eventual_outcome FROM model_predictions WHERE eventual_outcome IN (0,1) AND id IN (SELECT MIN(id) FROM model_predictions GROUP BY ticker)"
-                ).fetchall()
-                metrics = calibration_metrics([(float(r[0]), int(r[1])) for r in rows])
-                return ("Calibration: INSUFFICIENT DATA" if metrics.samples < 30 else
-                        f"Calibration n={metrics.samples} Brier={metrics.brier_score:.4f} logloss={metrics.log_loss:.4f}")
+                from src.research.readiness import database_readiness
+                _, _, evidence = database_readiness(self.database, self.bankroll)
+                return (f"Independent current-model events: {evidence.resolved_markets}/200. "
+                        + ("Calibration: INSUFFICIENT DATA" if evidence.brier_score is None else
+                           f"Brier: {evidence.brier_score:.4f}. This alone does not prove profit."))
         if command == "/pnl":
             tracker = CostTracker(self.database)
             now = datetime.now(timezone.utc)

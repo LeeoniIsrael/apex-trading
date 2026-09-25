@@ -31,12 +31,12 @@ def check_health(database: Database, data_directory: Path, min_free_mb: int = 51
             "SELECT metric_date FROM strategy_metrics WHERE metric_name='service_heartbeat' "
             "ORDER BY id DESC LIMIT 1"
         ).fetchone()
-    heartbeat_fresh = True
+    heartbeat_fresh = False
     if heartbeat:
         heartbeat_at = datetime.fromisoformat(str(heartbeat[0]).replace("Z", "+00:00"))
         heartbeat_age = now - heartbeat_at.astimezone(timezone.utc)
         checks["heartbeat_age_seconds"] = str(round(heartbeat_age.total_seconds()))
-        heartbeat_fresh = heartbeat_age <= timedelta(minutes=5)
+        heartbeat_fresh = timedelta(0) <= heartbeat_age <= timedelta(minutes=5)
     else:
         checks["heartbeat_age_seconds"] = "not_recorded"
     healthy = (

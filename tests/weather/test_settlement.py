@@ -133,3 +133,16 @@ def test_station_registry_identifiers_are_unique_and_bidirectional():
     for station in STATIONS:
         assert station_by_identifier(station.station_id) == station
         assert station_by_identifier(station.climate_product_id) == station
+
+
+def test_conflicting_station_date_and_unknown_inclusivity_are_blocked():
+    assert not parse_settlement_spec(_market(rules_secondary='Station KLAX')).tradeable
+    assert not parse_settlement_spec(_market(event_ticker='KXHIGHAUS-26SEP24')).tradeable
+    assert not parse_settlement_spec(_market(rules_primary='Maximum temperature at CLIAUS for Sep 23, 2026 according to The Weather Company.',floor_strike=90)).tradeable
+    spec=parse_settlement_spec(_market(rules_primary='Hourly temperature at KAUS at 3:00 pm on Sep 23, 2026 is greater than 90 according to The Weather Company.'))
+    assert 'hourly_execution_not_supported' in spec.ambiguity_flags
+
+
+def test_between_range_semantics():
+    spec=parse_settlement_spec(_market(rules_primary='Maximum temperature at CLIAUS for Sep 23, 2026 is between 78 and 79 degrees according to The Weather Company.'))
+    assert spec.tradeable and spec.threshold_low==78 and spec.threshold_high==79

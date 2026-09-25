@@ -94,3 +94,14 @@ def test_partial_fills_multiple_sides_and_unknown_rules(tmp_path):
         c.execute('INSERT INTO markets(ticker,raw_json,observed_at) VALUES(?,?,?)',('TEST',json.dumps({'ticker':'TEST','title':'Unknown rules'}),'2026-09-23'))
         c.execute('INSERT INTO positions VALUES(?,?,?,?,?,?)',('TEST','yes',10,40,0,'2026-09-23'))
     assert SettlementReconciler(unknown,nws_user_agent='test',twc=FakeTWC(),nws=NoNWS()).reconcile()==0
+
+
+def test_current_day_cannot_settle_from_an_early_official_report(tmp_path):
+    from datetime import datetime, timezone, timedelta
+    db=Database(tmp_path/'db');db.migrate()
+    tomorrow=(datetime.now(timezone.utc)+timedelta(days=1)).strftime('%b %d, %Y')
+    market={'ticker':'FUTURE','rules_primary':f'Maximum temperature at CLIAUS for {tomorrow} is less than 96 according to The Weather Company.'}
+    with db.transaction() as c:
+        c.execute('INSERT INTO markets(ticker,raw_json,observed_at) VALUES(?,?,?)',('FUTURE',json.dumps(market),'now'))
+        c.execute('INSERT INTO positions VALUES(?,?,?,?,?,?)',('FUTURE','yes',10,40,0,'now'))
+    assert SettlementReconciler(db,nws_user_agent='test',twc=FakeTWC(),nws=NoNWS()).reconcile()==0

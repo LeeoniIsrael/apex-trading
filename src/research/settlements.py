@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.storage.database import Database
-from src.strategy.settlement import OfficialSource, parse_settlement_spec, value_in_contract
+from src.strategy.settlement import MarketType, OfficialSource, parse_settlement_spec, value_in_contract
 from src.weather.climate_reports import NWSClimateProvider
 from src.weather.stations import station_by_identifier
 from src.weather.weather_company import WeatherCompanyProvider
@@ -39,6 +39,9 @@ class SettlementReconciler:
             spec = parse_settlement_spec(market)
             if not spec.tradeable or spec.market_date is None or spec.official_source is None:
                 continue
+            if (spec.market_type != MarketType.DAILY or spec.observation_window_end is None
+                or datetime.now(timezone.utc) < spec.observation_window_end):
+                continue
             station = station_by_identifier(spec.station_id or spec.nws_climate_product_id)
             if station is None:
                 continue
@@ -59,7 +62,7 @@ class SettlementReconciler:
                         )
                 else:
                     report = self.nws.latest(station, spec.market_date)
-                    if report is None:
+                    if report is None or report.issued_at < spec.observation_window_end:
                         result_cache[cache_key] = None
                     else:
                         result_cache[cache_key] = (
