@@ -72,8 +72,8 @@ def database_readiness(database, bankroll=100.0):
                               "CAST(strftime('%s',captured_at)-observation_age AS INTEGER) AS observation_time "
                               "FROM research_candidates)").fetchone()[0]
         rows = c.execute("SELECT r.*,s.yes_outcome FROM research_candidates r JOIN settlements s "
-                         "ON s.ticker=r.ticker AND s.final=1 WHERE r.split='holdout' AND r.id IN "
-                         "(SELECT MIN(id) FROM research_candidates WHERE baseline_action LIKE 'BUY%' GROUP BY event_key)").fetchall()
+                         "ON s.ticker=r.ticker AND s.final=1 WHERE r.split='holdout' AND r.model_version='two-sided-budget-v2' AND r.id IN "
+                         "(SELECT MIN(id) FROM research_candidates WHERE model_version='two-sided-budget-v2' AND baseline_action LIKE 'BUY%' GROUP BY event_key)").fetchall()
         issues = c.execute("SELECT COUNT(*) FROM health_events WHERE severity IN ('error','critical') "
                            "OR code IN ('settlement_parser_failure','settlement_reconcile_failed','fetch_failed','unknown_fee_schedule','invalid_fee_multiplier')").fetchone()[0]
         checks = {r['name']: bool(r['passed']) and 0 <= (datetime.now(timezone.utc)-datetime.fromisoformat(r['checked_at'])).total_seconds() < 86400

@@ -53,7 +53,7 @@ def decide(
     if edge is None:
         reasons.append("no_executable_price")
     else:
-        if edge.net_ev_usd <= 0 or edge.gross_edge < min_net_edge:
+        if edge.net_ev_usd <= 0 or edge.net_ev_usd / max(1, edge.fillable_contracts) < min_net_edge:
             reasons.append("insufficient_net_edge")
         if edge.spread_cents is None or edge.spread_cents > max_spread_cents:
             reasons.append("spread_limit")
@@ -64,3 +64,10 @@ def decide(
     assert edge is not None
     action = DecisionAction.BUY_YES if edge.side == "yes" else DecisionAction.BUY_NO
     return Decision(action, ("positive_net_ev",), edge)
+
+
+def apply_portfolio_blocks(signal: Decision, blocks: tuple[str, ...]) -> Decision:
+    """A qualifying research signal does not override order permission."""
+    if not blocks:
+        return signal
+    return Decision(DecisionAction.SKIP, tuple(sorted(set(signal.reason_codes + blocks))), signal.edge)

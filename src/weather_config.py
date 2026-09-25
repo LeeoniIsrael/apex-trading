@@ -20,6 +20,7 @@ class WeatherSettings(BaseSettings):
     kalshi_private_key_path: Path | None = None
     live_enablement_path: Path = Path("data/LIVE_ENABLED")
     live_database_path: Path = Path("data/apex_live.sqlite3")
+    live_capital_limit_usd: float = Field(default=100.0, gt=0, le=100)
     live_max_order_usd: float = Field(default=2.0, gt=0)
     live_max_exposure_usd: float = Field(default=10.0, gt=0)
     live_max_city_exposure_usd: float = Field(default=5.0, gt=0)

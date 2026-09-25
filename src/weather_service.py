@@ -27,8 +27,9 @@ from src.research.settlements import SettlementReconciler
 from src.risk.exposure import RiskPolicy, RiskState, risk_blocks
 from src.risk.sizing import SizingLimits, size_contracts
 from src.storage.database import Database
-from src.strategy.decision_engine import Decision, DecisionAction, decide
+from src.strategy.decision_engine import Decision, DecisionAction, decide, apply_portfolio_blocks
 from src.strategy.edge import calculate_edge
+from src.strategy.opportunities import ranked_opportunities
 from src.strategy.jev import JevClient, JevReview
 from src.strategy.monte_carlo import simulate_contract_probability
 from src.strategy.runtime_review import RuntimeExceptionReviewer
@@ -403,22 +404,19 @@ class WeatherService:
                 already_settled=connection.execute("SELECT 1 FROM settlements WHERE ticker=? AND final=1",(spec.ticker,)).fetchone()
             if already_settled:
                 continue
-            side = "yes" if estimate.probability >= 0.5 else "no"
-            side_probability = estimate.probability if side == "yes" else 1 - estimate.probability
-            best_ask = book.best_ask(side)
-            if best_ask is None:
+            # Research uses a fixed capped budget even when the real portfolio is blocked.
+            # Final portfolio checks still control all orders below.
+            choices = ranked_opportunities(
+                probability_yes=estimate.probability, orderbook=book,
+                budget_usd=min(2.0, self.settings.bankroll*.02),
+                fee_rate=fee_rate, min_liquidity=self.settings.min_liquidity)
+            if not choices:
                 continue
-            contracts = size_contracts(
-                probability=side_probability, price_cents=best_ask,
-                limits=SizingLimits(bankroll_usd=max(.01, min(self.settings.bankroll, account.equity))),
-                current_total_exposure_usd=total_exposure, calibration_quality=0,
-            )
-            if contracts <= 0:
-                continue
-            edge = calculate_edge(
-                side=side, model_probability=side_probability, contracts=contracts,
-                orderbook=book, fill_probability=0.5, fee_rate=fee_rate,
-            )
+            edge=choices[0]
+            side=edge.side
+            side_probability=edge.model_probability
+            best_ask=book.best_ask(side)
+            contracts=edge.contracts
             exposure = contracts * edge.executable_price_cents / 100 + edge.fee_usd
             blocks = risk_blocks(
                 RiskState(
@@ -432,6 +430,8 @@ class WeatherService:
             external_vetoes: tuple[str, ...] = ()
             if (
                 self.exception_reviewer is not None
+                and not blocks
+                and edge.net_ev_usd > 0
                 and forecast_disagreement >= self.settings.llm_review_disagreement_f
             ):
                 try:
@@ -463,11 +463,13 @@ class WeatherService:
                 min_model_confidence=self.settings.min_model_confidence,
                 min_net_edge=self.settings.min_net_edge,
                 max_spread_cents=self.settings.max_spread_cents,
-                min_liquidity_contracts=self.settings.min_liquidity,
-                risk_reason_codes=blocks,
-                external_veto_codes=external_vetoes,
+                min_liquidity_contracts=1,
+                risk_reason_codes=(),
+                external_veto_codes=(),
             )
             deterministic_action = decision.action.value
+            # Shadow qualification never authorizes an order or an AI call.
+            decision = apply_portfolio_blocks(decision, blocks + external_vetoes)
             jev_action: str | None = None
             jev_latency_ms = 0.0
             jev_cost_usd = 0.0

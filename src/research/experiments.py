@@ -23,8 +23,7 @@ def allocation(event_key: str) -> tuple[str, bool]:
 def record_candidate(db: Database, *, spec, now, side, edge, baseline, final, jev,
                      observation_age, surprise, disagreement, probability_change,
                      book_change, latest_bid):
-    event = '|'.join((spec.station_id or '', spec.official_source.value,
-                      str(spec.market_date)))
+    event = '|'.join((spec.station_id or '', str(spec.market_date)))
     split, control = allocation(event)
     if spec.last_trading_time is None or spec.last_trading_time <= now:
         raise ValueError('market close time is missing or elapsed')
@@ -34,7 +33,7 @@ def record_candidate(db: Database, *, spec, now, side, edge, baseline, final, je
     lag = (observation_age <= 300 and probability_change is not None and book_change is not None
            and probability_change >= .05 and book_change < probability_change)
     data = dict(ticker=spec.ticker, event_key=event, captured_at=now.isoformat(), split=split,
-                model_version='remaining-day-v1', side=side, price_cents=price,
+                model_version='two-sided-budget-v2', side=side, price_cents=price,
                 contracts=edge.fillable_contracts, fee_usd=edge.fee_usd,
                 probability=edge.model_probability, net_ev_usd=edge.net_ev_usd,
                 baseline_action=baseline, final_action='CONTROL' if control and final.startswith('BUY') else final,
@@ -58,8 +57,8 @@ def report(db: Database, bankroll: float = 100) -> dict:
     account = paper_account(db, bankroll)
     with db.connect() as c:
         rows = c.execute("SELECT r.*,s.yes_outcome FROM research_candidates r JOIN settlements s "
-                         "ON s.ticker=r.ticker AND s.final=1 WHERE r.id IN "
-                         "(SELECT MIN(id) FROM research_candidates WHERE baseline_action LIKE 'BUY%' GROUP BY ticker)").fetchall()
+                         "ON s.ticker=r.ticker AND s.final=1 WHERE r.model_version='two-sided-budget-v2' AND r.id IN "
+                         "(SELECT MIN(id) FROM research_candidates WHERE model_version='two-sided-budget-v2' AND baseline_action LIKE 'BUY%' GROUP BY ticker)").fetchall()
     groups = defaultdict(lambda: {'markets':0, 'hypothetical_pnl':0., 'actual_pnl':0.,
                                   'winners_vetoed':0, 'losers_vetoed':0, 'jev_pnl_difference':0.})
     for r in rows:

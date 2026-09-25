@@ -95,7 +95,7 @@ class LiveExecutor:
             c.execute('BEGIN IMMEDIATE')
             if c.execute('SELECT 1 FROM orders WHERE client_order_id=?',(client_id,)).fetchone():
                 raise RuntimeError('duplicate client order blocked')
-            balance = self._gate()
+            balance = min(self._gate(), self.settings.live_capital_limit_usd)
             self.reconcile()
             with self.paper_database.connect() as p:
                 market = p.execute('SELECT raw_json FROM markets WHERE ticker=?',(ticker,)).fetchone()
@@ -140,6 +140,7 @@ class LiveExecutor:
                 or len({r['ticker'] for r in reserved_rows}) >= s.live_max_open_positions
                 or daily >= s.live_max_daily_orders or day_start-balance >= s.live_max_daily_loss_usd
                 or (peak-balance)/peak >= s.live_max_drawdown
+                or reserved+value > s.live_capital_limit_usd
                 or balance-reserved-value < s.live_balance_floor_usd):
                 raise RuntimeError('live risk limit')
             c.execute('INSERT INTO orders VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
