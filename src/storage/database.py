@@ -164,6 +164,12 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     CREATE INDEX IF NOT EXISTS idx_candidates_event_id ON research_candidates(event_key,id);
     CREATE INDEX IF NOT EXISTS idx_candidates_ticker_id ON research_candidates(ticker,id);
     """),
+    (6, """
+    CREATE TABLE IF NOT EXISTS live_remote_records (
+        kind TEXT NOT NULL, remote_id TEXT NOT NULL, payload TEXT NOT NULL,
+        PRIMARY KEY(kind, remote_id)
+    );
+    """),
 )
 
 

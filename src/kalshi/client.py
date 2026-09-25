@@ -93,11 +93,17 @@ class KalshiClientV2:
     def get_balance(self) -> dict[str, Any]:
         return self.request("GET", "/portfolio/balance", authenticated=True)
 
-    def get_positions(self) -> dict[str, Any]:
-        return self.request("GET", "/portfolio/positions", authenticated=True)
+    def get_positions(self, **params: Any) -> dict[str, Any]:
+        return self.request("GET", "/portfolio/positions", params=params, authenticated=True)
 
     def get_orders(self, **params: Any) -> dict[str, Any]:
         return self.request("GET", "/portfolio/orders", params=params, authenticated=True)
+
+    def get_fills(self, **params: Any) -> dict[str, Any]:
+        return self.request("GET", "/portfolio/fills", params=params, authenticated=True)
+
+    def get_settlements(self, **params: Any) -> dict[str, Any]:
+        return self.request("GET", "/portfolio/settlements", params=params, authenticated=True)
 
     def create_order(
         self,

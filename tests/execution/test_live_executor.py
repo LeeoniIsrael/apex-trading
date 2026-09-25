@@ -11,13 +11,16 @@ from src.weather_config import WeatherSettings
 
 class FakeClient:
     signer = object()
-    def __init__(self): self.calls=[]
+    def __init__(self): self.calls=[]; self.orders=[]
     def get_balance(self): return {'balance':10000}
-    def get_orders(self): return {'orders':[]}
-    def get_positions(self): return {'market_positions':[]}
+    def get_orders(self,**kw): return {'orders':self.orders}
+    def get_fills(self,**kw): return {'fills':[]}
+    def get_settlements(self,**kw): return {'settlements':[]}
+    def get_positions(self,**kw): return {'market_positions':[]}
     def create_order(self,**kwargs):
         self.calls.append(kwargs)
-        return {'order':{'status':'resting','fill_count':0}}
+        self.orders.append(dict(kwargs,order_id='remote-'+kwargs['client_order_id'],initial_count_fp=str(kwargs['contracts']),fill_count_fp='0',remaining_count_fp='0',status='canceled'))
+        return {'order':{'status':'cancelled','fill_count':0}}
 
 
 def setup(tmp_path, monkeypatch):
@@ -83,7 +86,7 @@ def test_guards_prevent_any_post(tmp_path,monkeypatch,block):
         with live.transaction() as c:
             key='live_peak' if block=='drawdown' else 'live_day_'+datetime.now(timezone.utc).date().isoformat()
             c.execute('INSERT INTO control_state VALUES(?,?,?)',(key,'200',datetime.now(timezone.utc).isoformat()))
-    elif block=='pagination': client.get_orders=lambda:{'orders':[],'cursor':'next'}
+    elif block=='pagination': client.get_orders=lambda **kw:{'orders':[],'cursor':'next'}
     elif block=='auth': client.signer=None
     with pytest.raises(RuntimeError): submit(ex)
     assert not client.calls
@@ -109,5 +112,5 @@ def test_balance_rejects_missing_auth_or_nan():
 def test_larger_account_cannot_bypass_hundred_dollar_budget(tmp_path,monkeypatch):
     ex,client,paper,live,s=setup(tmp_path,monkeypatch)
     client.get_balance=lambda:{'balance':10100}
-    with pytest.raises(RuntimeError,match='approved capital'): submit(ex)
+    with pytest.raises(RuntimeError,match='cash mismatch'): submit(ex)
     assert not client.calls

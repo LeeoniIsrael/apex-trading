@@ -121,3 +121,25 @@ This is a safety block, not a service outage; no threshold was loosened.
 
 An explicit `alert_baseline` was set at upgrade time, preventing old trades from
 being announced as new. Subsequent alerts retain durable delivery tracking.
+
+## Audited remote recovery (v3 preparation)
+
+The live adapter now walks bounded pagination for orders, fills, positions and
+settlements. It recovers a timed-out submission only when the original client ID,
+actual fills, exact reported fees, signed position and account cash all agree.
+Persisted remote records preserve cost basis across API archival and restarts.
+Missing submissions are never retried; fractional fills, resting IOC remainders,
+untracked positions, nonbinary settlements, changed historical fills and cash
+mismatches remain hard stops. This supported path is whole-contract, buy-and-hold,
+one position per ticker. Unknown external account activity is not adopted.
+
+Initial approved cash is capped at $100. Subsequent cash must reconcile exactly
+to that initial amount, purchases, fees and settlement payouts; earned profits can
+exceed $100 without authorizing a larger deposit. Dollar risk limits remain fixed.
+Conservative drawdown and daily-loss limits currently use cash, so purchases can
+trigger an earlier stop than marked-equity accounting would.
+
+Unit tests of recovery do not certify production readiness. Live monitoring,
+production end-to-end checks, fee-override validation, and prospective strategy
+evidence still must clear the launch gate. The previous manual-reconciliation
+paragraph is superseded only for the supported audited recovery cases above.

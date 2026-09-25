@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from src.kalshi.fees import trading_fee_usd
+from src.execution.portfolio_audit import reconcile_portfolio
 from src.research.readiness import database_readiness
 from src.storage.database import Database
 from src.strategy.settlement import parse_settlement_spec
@@ -53,35 +54,18 @@ class LiveExecutor:
                 if controls.get('emergency_stop') != 'false' or controls.get('paused') != 'false':
                     raise RuntimeError('emergency stop or pause is active')
         balance = authenticated_balance(self.client)
-        if balance > s.live_capital_limit_usd:
-            raise RuntimeError('funded balance exceeds approved capital; isolate the $100 account before live use')
+        with self.database.connect() as c:
+            initial = c.execute("SELECT value FROM control_state WHERE key='live_initial_cash'").fetchone()
+        if initial is None and balance > s.live_capital_limit_usd:
+            raise RuntimeError('funded balance exceeds approved capital')
         if balance < s.live_balance_floor_usd:
             raise RuntimeError('balance safety floor')
         return balance
 
     def reconcile(self):
-        orders = self.client.get_orders()
-        positions = self.client.get_positions()
-        # Pagination is never silently ignored. A later implementation may walk it.
-        if orders.get('cursor') or positions.get('cursor'):
-            raise RuntimeError('remote pagination requires reconciliation')
-        remote_orders = orders.get('orders')
-        remote_positions = positions.get('market_positions')
-        if not isinstance(remote_orders, list) or not isinstance(remote_positions, list):
-            raise RuntimeError('invalid remote portfolio schema')
-        with self.database.connect() as c:
-            known = {r[0] for r in c.execute('SELECT client_order_id FROM orders WHERE paper=0')}
-            if c.execute("SELECT 1 FROM orders WHERE status IN ('unknown','submitting')").fetchone():
-                raise RuntimeError('ambiguous submission requires reconciliation')
-        if any(o.get('client_order_id') not in known for o in remote_orders
-               if o.get('status') not in ('canceled','cancelled','executed')):
-            raise RuntimeError('untracked remote orders require reconciliation')
-        # Until a remote fill has an audited local cost basis, refuse further orders.
-        # Do not create zero-cost placeholder positions or erase existing accounting.
-        if any(float(p.get('position_fp', p.get('position', 0))) != 0 for p in remote_positions):
-            raise RuntimeError('remote positions require manual cost-basis reconciliation')
-        self.remote_orders = remote_orders
-        return {'orders':len(remote_orders), 'positions':len(remote_positions)}
+        self.audit = reconcile_portfolio(self.database, self.client,
+            authenticated_balance(self.client), self.settings.live_capital_limit_usd)
+        return self.audit
 
     def submit_order(self, *, ticker, side, action, price_cents, contracts, client_order_id):
         if side not in ('yes','no') or action != 'buy':
@@ -92,13 +76,18 @@ class LiveExecutor:
             raise ValueError('invalid client order id')
         client_id = 'LIVE-'+client_order_id.removeprefix('LIVE-')
         now = datetime.now(timezone.utc)
+        with self.database.connect() as c:
+            if c.execute('SELECT 1 FROM orders WHERE client_order_id=?',(client_id,)).fetchone():
+                raise RuntimeError('duplicate client order blocked')
+        audit = self.reconcile()
         with self.database.transaction() as c:
             # Serialize across processes and reserve intent before POST.
             c.execute('BEGIN IMMEDIATE')
             if c.execute('SELECT 1 FROM orders WHERE client_order_id=?',(client_id,)).fetchone():
                 raise RuntimeError('duplicate client order blocked')
             balance = min(self._gate(), self.settings.live_capital_limit_usd)
-            self.reconcile()
+            if c.execute('SELECT COUNT(*) FROM orders WHERE paper=0').fetchone()[0] != audit.orders:
+                raise RuntimeError('portfolio changed during reconciliation')
             with self.paper_database.connect() as p:
                 market = p.execute('SELECT raw_json FROM markets WHERE ticker=?',(ticker,)).fetchone()
                 candidate = p.execute('SELECT * FROM research_candidates WHERE ticker=? ORDER BY id DESC LIMIT 1',(ticker,)).fetchone()
@@ -119,17 +108,17 @@ class LiveExecutor:
                 raise RuntimeError('invalid fee schedule')
             value = contracts*price_cents/100 + float(trading_fee_usd(contracts,price_cents,rate=rate))
             s=self.settings
-            reserved_rows = c.execute("SELECT ticker,contracts,price_cents FROM orders WHERE paper=0 AND status NOT IN ('cancelled','canceled','rejected')").fetchall()
-            # Reserve full submitted amounts (including filled orders) until audited recovery.
-            reserved=sum(r['contracts'] for r in reserved_rows)
-            cities={}
+            reserved = float(audit.open_cost)
+            cities = {}
             with self.paper_database.connect() as p:
-                for row in reserved_rows:
-                    metadata=p.execute('SELECT raw_json FROM markets WHERE ticker=?',(row['ticker'],)).fetchone()
+                for held_ticker, position in audit.positions.items():
+                    metadata = p.execute('SELECT raw_json FROM markets WHERE ticker=?',(held_ticker,)).fetchone()
                     if not metadata: raise RuntimeError('unknown correlated exposure')
-                    city=parse_settlement_spec(json.loads(metadata[0])).city
+                    city = parse_settlement_spec(json.loads(metadata[0])).city
                     if not city: raise RuntimeError('unknown correlated exposure')
-                    cities[city]=cities.get(city,0)+row['contracts']
+                    cities[city] = cities.get(city, 0) + float(position['cost'])
+            if ticker in audit.positions:
+                raise RuntimeError('one audited position per market')
             daily=c.execute('SELECT COUNT(*) FROM orders WHERE paper=0 AND created_at LIKE ?',(now.date().isoformat()+'%',)).fetchone()[0]
             states=dict(c.execute("SELECT key,value FROM control_state WHERE key LIKE 'live_%'"))
             peak=max(float(states.get('live_peak',balance)),balance)
@@ -139,11 +128,11 @@ class LiveExecutor:
                 c.execute('INSERT INTO control_state VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at',(key,str(val),now.isoformat()))
             if (value > s.live_max_order_usd or reserved+value > s.live_max_exposure_usd
                 or cities.get(spec.city,0)+value > s.live_max_city_exposure_usd
-                or len({r['ticker'] for r in reserved_rows}) >= s.live_max_open_positions
+                or len(audit.positions) >= s.live_max_open_positions
                 or daily >= s.live_max_daily_orders or day_start-balance >= s.live_max_daily_loss_usd
                 or (peak-balance)/peak >= s.live_max_drawdown
                 or reserved+value > s.live_capital_limit_usd
-                or balance-reserved-value < s.live_balance_floor_usd):
+                or balance-value < s.live_balance_floor_usd):
                 raise RuntimeError('live risk limit')
             c.execute('INSERT INTO orders VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
                       (client_id,client_id,ticker,side,action,price_cents,contracts,0,'submitting',0,now.isoformat(),now.isoformat()))
