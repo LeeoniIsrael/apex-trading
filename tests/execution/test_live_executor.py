@@ -177,3 +177,14 @@ def test_invalid_observation_age_blocks_submission(tmp_path, monkeypatch, age):
     with pytest.raises(RuntimeError,match='stale'):
         submit(ex)
     assert not client.calls
+
+
+@pytest.mark.parametrize('limit',['daily','drawdown'])
+def test_new_order_cannot_cross_projected_cash_limit(tmp_path,monkeypatch,limit):
+    ex,client,paper,live,s=setup(tmp_path,monkeypatch)
+    key='live_day_'+datetime.now(timezone.utc).date().isoformat() if limit=='daily' else 'live_peak'
+    value='101.5' if limit=='daily' else '110.5'
+    with live.transaction() as c:
+        c.execute('INSERT INTO control_state VALUES(?,?,?)',(key,value,datetime.now(timezone.utc).isoformat()))
+    with pytest.raises(RuntimeError,match='live risk limit'): submit(ex)
+    assert not client.calls

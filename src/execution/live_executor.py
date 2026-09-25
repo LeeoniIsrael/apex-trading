@@ -159,8 +159,8 @@ class LiveExecutor:
             if (value > s.live_max_order_usd or reserved+value > s.live_max_exposure_usd
                 or cities.get(spec.city,0)+value > s.live_max_city_exposure_usd
                 or len(audit.positions) >= s.live_max_open_positions
-                or daily >= s.live_max_daily_orders or day_start-balance >= s.live_max_daily_loss_usd
-                or (peak-balance)/peak >= s.live_max_drawdown
+                or daily >= s.live_max_daily_orders or day_start-balance+value > s.live_max_daily_loss_usd
+                or (peak-balance+value)/peak > s.live_max_drawdown
                 or reserved+value > s.live_capital_limit_usd
                 or balance-value < s.live_balance_floor_usd):
                 raise RuntimeError('live risk limit')

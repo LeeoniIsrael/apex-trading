@@ -127,3 +127,13 @@ def test_existing_live_position_is_researched_but_not_submitted_again(tmp_path,m
     assert not client.calls
     with paper.connect() as c:
         assert c.execute('SELECT COUNT(*) FROM research_candidates').fetchone()[0]>=2
+
+
+def test_almost_used_daily_budget_skips_without_failing_cycle(tmp_path,monkeypatch):
+    service,client,paper,live=cycle(tmp_path,monkeypatch)
+    with live.transaction() as c:
+        c.execute('INSERT INTO control_state VALUES(?,?,?)',
+            ('live_day_'+datetime.now(timezone.utc).date().isoformat(),'101.9824',datetime.now(timezone.utc).isoformat()))
+    result=service.run_once()
+    assert result['predictions']==1 and result['live_orders']==0
+    assert not client.calls

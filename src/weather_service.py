@@ -584,6 +584,9 @@ class WeatherService:
                 continue
             if decision.action.value not in {"BUY_YES", "BUY_NO"}:
                 continue
+            if (self.live is not None
+                    and exposure > max(0.0, self.settings.live_max_daily_loss_usd+daily_pnl)):
+                continue  # Keep research, but do not overshoot remaining daily cash budget.
             if self._control_blocked():
                 break
             client_order_id = str(uuid.uuid4())
@@ -593,6 +596,7 @@ class WeatherService:
                     contracts=contracts, client_order_id=client_order_id,
                 )
                 total_exposure += exposure
+                daily_pnl -= exposure  # Conservative reservation until the next audit.
                 city = spec.city or "unknown"
                 city_exposure[city] = city_exposure.get(city, 0.0) + exposure
                 open_tickers.add(spec.ticker)

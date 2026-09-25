@@ -258,3 +258,18 @@ researching held markets but does not send another entry for the same ticker.
 Any resumption of real trading is a separate operator action. The previous
 prelaunch tests did not exercise an actual V2 NO fill; this production incident
 exposed that coverage gap. Do not describe the earlier tests as proof against it.
+
+Recovery: deployed the NO-field interpretation fix while paused, stopped the old
+worker to prevent repeated failed-cycle alerts, and performed two matching
+read-only exchange reconciliations as the service user. Result: cash $96.0261,
+open cost $1.9824, 31 NO contracts, one order/one fill, realized P&L zero. Pause
+remained true. Telegram continued running. The environment file is root-only;
+maintenance must pass its values through the child process environment (as
+systemd does), rather than asking the service user to read that file directly.
+
+Also tightened the daily cash-decline and cash-drawdown checks to include the
+proposed order cost. A near-exhausted daily budget now causes the cycle to skip
+new entries while retaining research, instead of overshooting or repeatedly
+raising an expected risk error. Conservative per-cycle reservations reset on the
+next actual account audit. 219 tests pass. The current $1.9824 entry nearly uses
+the $2 daily cash budget; this is not a realized trading loss.
