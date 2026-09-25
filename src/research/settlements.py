@@ -25,9 +25,13 @@ class SettlementReconciler:
         with self.database.connect() as connection:
             rows = connection.execute(
                 "SELECT DISTINCT m.ticker,m.raw_json FROM markets m "
-                "JOIN model_predictions p ON p.ticker=m.ticker "
-                "WHERE p.eventual_outcome IS NULL"
+                "WHERE NOT EXISTS (SELECT 1 FROM settlements s WHERE s.ticker=m.ticker AND s.final=1) "
+                "AND (EXISTS (SELECT 1 FROM model_predictions p WHERE p.ticker=m.ticker) "
+                "OR EXISTS (SELECT 1 FROM positions p WHERE p.ticker=m.ticker AND p.contracts>0))"
             ).fetchall()
+        with self.database.connect() as connection:
+            if connection.execute("SELECT 1 FROM orders WHERE paper=0 LIMIT 1").fetchone():
+                raise RuntimeError("paper settlement requires a separate paper database")
         settled = 0
         result_cache: dict[tuple[str, str, str], tuple[float | None, str] | None] = {}
         for row in rows:
@@ -78,6 +82,12 @@ class SettlementReconciler:
             yes_outcome = int(value_in_contract(official_value, spec))
             now = datetime.now(timezone.utc).isoformat()
             with self.database.transaction() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                existing = connection.execute("SELECT yes_outcome FROM settlements WHERE ticker=? AND final=1", (spec.ticker,)).fetchone()
+                if existing:
+                    if existing[0] != yes_outcome:
+                        raise RuntimeError("conflicting official settlement")
+                    continue
                 connection.execute(
                     "INSERT INTO settlements(ticker,official_value,yes_outcome,source,final," 
                     "settled_at,raw_payload) VALUES(?,?,?,?,1,?,?) ON CONFLICT(ticker) DO NOTHING",
@@ -92,7 +102,11 @@ class SettlementReconciler:
                     payout = position["contracts"] if wins else 0.0
                     cost = position["contracts"] * position["average_price_cents"] / 100
                     fees = connection.execute(
-                        "SELECT COALESCE(SUM(fee_usd),0) FROM fills WHERE ticker=? AND side=?",
+                        "SELECT COALESCE(SUM(f.fee_usd),0) FROM fills f JOIN orders o ON o.id=f.order_id "
+                        "WHERE f.ticker=? AND f.side=? AND o.paper=1 AND o.action='buy' "
+                        "AND f.filled_at>COALESCE((SELECT MAX(x.filled_at) FROM fills x "
+                        "JOIN orders y ON y.id=x.order_id WHERE x.ticker=f.ticker AND x.side=f.side "
+                        "AND y.action='sell'),'')",
                         (spec.ticker, position["side"]),
                     ).fetchone()[0]
                     pnl = payout - cost - float(fees)
@@ -101,6 +115,7 @@ class SettlementReconciler:
                         "updated_at=? WHERE ticker=? AND side=?",
                         (pnl, now, spec.ticker, position["side"]),
                     )
+                connection.execute("UPDATE orders SET status='cancelled',updated_at=? WHERE ticker=? AND paper=1 AND status IN ('resting','partially_filled')", (now, spec.ticker))
                 connection.execute(
                     "UPDATE model_predictions SET eventual_outcome=? WHERE ticker=?",
                     (yes_outcome, spec.ticker),

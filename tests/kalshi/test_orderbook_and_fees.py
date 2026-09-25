@@ -48,3 +48,8 @@ def test_no_ask_liquidity_is_not_executable():
     with pytest.raises(ValueError, match="no executable"):
         calculate_edge(side="yes", model_probability=.8, contracts=1, orderbook=book)
 
+
+
+def test_vwap_slippage_is_not_deducted_twice():
+    edge = calculate_edge(side='yes', model_probability=.7, contracts=10, orderbook=_book())
+    assert edge.net_ev_usd == pytest.approx(10*(.7-.475)-edge.fee_usd)

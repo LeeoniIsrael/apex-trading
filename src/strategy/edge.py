@@ -55,7 +55,7 @@ def calculate_edge(
                 * min(contracts, fillable) / 100)
     filled = min(contracts, fillable)
     gross_ev = filled * (model_probability - average_price / 100)
-    net_ev = gross_ev - fee - slippage
+    net_ev = gross_ev - fee - extra_slippage_cents_per_contract * filled / 100
     capital = filled * average_price / 100 + fee
     return EdgeEstimate(
         side=side,

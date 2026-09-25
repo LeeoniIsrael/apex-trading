@@ -26,7 +26,7 @@ class PaperOrderResult:
 
 
 class PaperExecutor:
-    def __init__(self, resting_fill_probability: float = 0.15) -> None:
+    def __init__(self, resting_fill_probability: float = 0.0) -> None:
         if not 0 <= resting_fill_probability <= 1:
             raise ValueError("resting_fill_probability must be within [0, 1]")
         self.resting_fill_probability = resting_fill_probability
