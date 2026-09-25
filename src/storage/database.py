@@ -159,6 +159,11 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         event_key TEXT PRIMARY KEY, sent_at TEXT NOT NULL
     );
     """),
+    (5, """
+    CREATE INDEX IF NOT EXISTS idx_orderbooks_ticker_id ON orderbook_snapshots(ticker,id);
+    CREATE INDEX IF NOT EXISTS idx_candidates_event_id ON research_candidates(event_key,id);
+    CREATE INDEX IF NOT EXISTS idx_candidates_ticker_id ON research_candidates(ticker,id);
+    """),
 )
 
 
