@@ -37,6 +37,7 @@ def main() -> int:
     sub.add_parser("run-once")
     enable = sub.add_parser("enable-live")
     enable.add_argument("--confirm", required=True)
+    enable.add_argument("--accept-unvalidated-strategy", action="store_true")
     args = parser.parse_args()
 
     settings = WeatherSettings(trading_mode="paper")
@@ -45,7 +46,7 @@ def main() -> int:
 
     if args.command == "launch-report":
         from src.research.launch_report import write_launch_report
-        report = write_launch_report(database, settings.bankroll)
+        report = write_launch_report(database, settings.bankroll, settings.live_validation_profile)
         print(json.dumps(report))
         return 0 if report['ready'] else 2
     if args.command == "emergency-stop":
@@ -105,6 +106,12 @@ def main() -> int:
     if args.command == "enable-live":
         if args.confirm != "I_ACCEPT_LIVE_RISK":
             raise SystemExit("confirmation phrase must be exactly I_ACCEPT_LIVE_RISK")
+        if settings.live_validation_profile == 'experimental_100':
+            if not args.accept_unvalidated_strategy:
+                raise SystemExit('experimental pilot requires --accept-unvalidated-strategy')
+            from src.research.readiness import launch_failures
+            failures = launch_failures(failures, settings.live_validation_profile)
+            ready = not failures
         if not ready:
             raise SystemExit(f"promotion gate failed: {', '.join(failures)}")
         settings.live_enablement_path.parent.mkdir(parents=True, exist_ok=True)
@@ -119,7 +126,7 @@ def main() -> int:
         if settings.database_path.resolve() == settings.live_database_path.resolve():
             raise SystemExit('paper and live databases must be separate')
         with settings.live_enablement_path.open('x') as marker:
-            marker.write(json.dumps({'confirmation':args.confirm, 'paper_database':str(settings.database_path.resolve()), 'live_database':str(settings.live_database_path.resolve()), 'created_at':datetime.now(timezone.utc).isoformat()}))
+            marker.write(json.dumps({'confirmation':args.confirm, 'paper_database':str(settings.database_path.resolve()), 'live_database':str(settings.live_database_path.resolve()), 'created_at':datetime.now(timezone.utc).isoformat(), 'validation_profile':settings.live_validation_profile, 'unvalidated_strategy_acknowledged':args.accept_unvalidated_strategy}))
         settings.live_enablement_path.chmod(0o600)
         print("Live enablement recorded. Set TRADING_MODE=live separately to activate.")
         return 0

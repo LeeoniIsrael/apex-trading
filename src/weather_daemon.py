@@ -69,7 +69,8 @@ def main() -> int:
                 )
             if time.monotonic()-last_launch_report >= 600:
                 from src.research.launch_report import write_launch_report
-                write_launch_report(service.database, service.settings.bankroll)
+                write_launch_report(service.database, service.settings.bankroll,
+                                    service.settings.live_validation_profile)
                 last_launch_report = time.monotonic()
         except Exception:
             stop_after_live_cycle_failure(service)

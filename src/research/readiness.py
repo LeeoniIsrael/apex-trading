@@ -6,6 +6,25 @@ from dataclasses import dataclass
 import math
 
 
+EXPERIMENTAL_RESEARCH_WAIVERS = frozenset({
+    'independent_evaluation', 'insufficient_market_snapshots',
+    'insufficient_resolved_markets', 'calibration_gate', 'nonpositive_net_ev',
+    'nonpositive_paper_pnl', 'drawdown_gate',
+})
+
+
+def launch_failures(failures, profile='validated'):
+    """A separately acknowledged pilot waives research proof, never technical checks.
+
+Historical paper drawdown is waived only as research qualification. The live
+executor still enforces its own account drawdown, cash, loss and exposure limits.
+"""
+    if profile not in ('validated', 'experimental_100'):
+        raise ValueError('unknown launch validation profile')
+    return tuple(f for f in failures if profile == 'validated'
+                 or f not in EXPERIMENTAL_RESEARCH_WAIVERS)
+
+
 @dataclass(frozen=True, slots=True)
 class ReadinessEvidence:
     market_snapshots: int

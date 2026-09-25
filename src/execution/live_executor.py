@@ -10,7 +10,7 @@ from src.kalshi.fees import trading_fee_usd
 from src.execution.portfolio_audit import reconcile_portfolio, pages
 from src.kalshi.fee_schedule import effective_fee
 from src.research.experiments import MODEL_VERSION
-from src.research.readiness import database_readiness
+from src.research.readiness import database_readiness, launch_failures
 from src.storage.database import Database
 from src.strategy.settlement import parse_settlement_spec
 
@@ -59,7 +59,14 @@ class LiveExecutor:
                 or marker.get('paper_database') != str(s.database_path.resolve())
                 or marker.get('live_database') != str(self.database.path.resolve())):
             raise RuntimeError('live marker does not match this account configuration')
+        if (marker.get('validation_profile', 'validated') != s.live_validation_profile
+            or (s.live_validation_profile == 'experimental_100'
+                and marker.get('unvalidated_strategy_acknowledged') is not True)):
+            raise RuntimeError('live marker does not acknowledge this validation profile')
         ready, failures, _ = database_readiness(self.paper_database, s.bankroll)
+        if s.live_validation_profile == 'experimental_100':
+            failures = launch_failures(failures, s.live_validation_profile)
+            ready = not failures
         if not ready:
             raise RuntimeError('live readiness blocked: '+','.join(failures))
         for db in (self.database, self.paper_database):

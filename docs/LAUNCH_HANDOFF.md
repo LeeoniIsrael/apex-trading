@@ -162,3 +162,35 @@ service-to-exchange path, real settlement lifecycle, production deployment of th
 latest changes, and chosen validation/pilot policy remain outstanding. Existing
 isolated unit tests and these demo checks must not be described as full unattended
 real-money launch readiness. No production activation or order was performed.
+
+## Automatic cycle and optional experimental profile — 2026-09-25
+
+Fixed live-cycle risk contamination: the cycle now takes cash, exact open costs,
+city exposure and risk history from the audited live account, not the paper
+ledger. Live cycles do not overwrite paper equity history. Both control databases
+are checked, cycle results distinguish live from paper attempts, and an uncaught
+live cycle failure durably pauses new orders and queues a health alert.
+
+202 tests pass, including full service-cycle tests from deterministic weather
+inputs through recorded candidates and the real LiveExecutor class with a mock
+exchange. Tests exercise unrelated paper drawdown, live drawdown, both stop
+stores, exact audited exposure, malformed state, persistent cycle-failure pause,
+experimental risk ceilings and separate operator acknowledgement.
+
+A separate demo integration then ran WeatherService through the actual Kalshi
+client and exchange. Weather/orderbook and readiness were explicitly test fixtures;
+actual rules, account reconciliation, final fee lookup and order API were real
+DEMO calls. One two-cent, one-contract IOC was cancelled without filling. The
+LiveExecutor rejected resubmission of its actual client ID. The demo stop was
+latched and its temporary marker removed in finally. Evidence:
+`~/.local/share/apex-weather/demo-test/full-cycle-report.json`. This is plumbing
+verification, not a profitable weather prediction or proof of production fills.
+
+Prepared the explicitly requested `experimental_100` profile. Research evidence
+is preserved, missing research requirements are disclosed as waived, and technical
+failures remain blockers. Default is still validated/paper. No live enablement
+marker has been created in production. See `docs/EXPERIMENTAL_100.md` for the
+inactive configuration, hard limits and operator-only activation conditions.
+
+Production read-only preflight: cash $0.2485, zero nonzero positions, zero resting
+orders; current NY series/event fee feed parsed as quadratic with multiplier 1.

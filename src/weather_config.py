@@ -13,6 +13,7 @@ class WeatherSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     trading_mode: Literal["paper", "live"] = "paper"
+    live_validation_profile: Literal["validated", "experimental_100"] = "validated"
     bankroll: float = Field(default=100.0, gt=0)
     database_path: Path = Path("data/apex_weather.sqlite3")
     kalshi_base_url: str = "https://external-api.kalshi.com/trade-api/v2"
@@ -52,6 +53,15 @@ class WeatherSettings(BaseSettings):
 
     @model_validator(mode="after")
     def enforce_live_gate(self) -> "WeatherSettings":
+        if self.live_validation_profile == 'experimental_100':
+            ceilings = {'live_max_order_usd':2, 'live_max_exposure_usd':10,
+                        'live_max_city_exposure_usd':5, 'live_max_daily_loss_usd':2,
+                        'live_max_drawdown':.10, 'live_max_open_positions':3,
+                        'live_max_daily_orders':10}
+            if any(getattr(self, name)>limit for name,limit in ceilings.items()):
+                raise ValueError('experimental pilot exceeds fixed risk ceilings')
+            if self.live_balance_floor_usd < 20:
+                raise ValueError('experimental pilot requires at least a $20 cash floor')
         if self.jev_enabled and not self.jev_api_key:
             raise ValueError("JEV_API_KEY is required when JEV_ENABLED=true")
         if self.runtime_llm_enabled and not self.openai_api_key:
