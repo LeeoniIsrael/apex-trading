@@ -40,6 +40,12 @@ class TelegramController:
                 a = paper_account(self.database, self.bankroll)
                 state = ("EMERGENCY" if controls.get("emergency_stop") == "true" else
                          "PAUSED" if controls.get("paused") == "true" else "RUNNING")
+                if state == 'RUNNING':
+                    from src.risk.exposure import RiskPolicy
+                    if a.discrepancies:
+                        state = 'NEW TRADES BLOCKED: accounting check needed'
+                    elif a.max_drawdown >= RiskPolicy().max_drawdown_pct:
+                        state = 'NEW TRADES BLOCKED: drawdown limit'
                 return (f"• Paper money only. System: {state}.\n"
                         f"• Starting bankroll: ${a.starting_bankroll:.2f}. Current paper equity: ${a.equity:.2f}.\n"
                         f"• Open position cost: ${a.open_cost:.2f}. Cash: ${a.cash:.2f}.\n"

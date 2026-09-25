@@ -103,3 +103,21 @@ all fills and cost basis, investigate the cause, and rerun readiness before
 manual local recovery. Never clear an ambiguous submission by issuing a new ID.
 POST requests are not automatically retried. All attempted IDs remain reserved
 across restarts, including failed or uncertain requests.
+
+## Verified existing paper deployment (2026-09-25 UTC)
+
+The existing host was located and verified; the historical opening note above
+about missing access is no longer current. Both systemd services are active.
+Deployment kept `TRADING_MODE=paper`, created no live marker, and preserved the
+existing environment file. Pre-upgrade code and a consistent SQLite backup are
+in `/var/backups/apex-weather/20260925T023417Z` on the server.
+
+The fill-ledger audit matched the cached positions: $328.07 realized trading P&L,
+$20.71 open cost, and $21.0902 recorded operating costs. Liquidation equity varies
+with current bids. The historical maximum drawdown was 22.33%, exceeding the
+15% policy limit. The first upgraded cycle collected research candidates and
+placed zero orders, with `drawdown_limit` recorded on every candidate decision.
+This is a safety block, not a service outage; no threshold was loosened.
+
+An explicit `alert_baseline` was set at upgrade time, preventing old trades from
+being announced as new. Subsequent alerts retain durable delivery tracking.

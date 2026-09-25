@@ -84,3 +84,12 @@ def test_upgrade_baseline_does_not_reannounce_old_trades(tmp_path):
         c.execute('INSERT INTO control_state VALUES(?,?,?)',('alert_baseline','2026-09-24T00:00:00+00:00','2026-09-24T00:00:00+00:00'))
         fill(c,'new','yes',1,40,.02,stamp='2026-09-24T01:00:00+00:00')
     assert [key for key,_ in AlertQueue(db).pending()]==['fill:fnew']
+
+
+def test_status_explains_drawdown_block(tmp_path):
+    db=Database(tmp_path/'db'); db.migrate()
+    with db.transaction() as c:
+        c.execute("INSERT INTO costs(incurred_at,category,amount_usd,description) VALUES('2026-09-23','infrastructure',21.09,'VPS')")
+    status=TelegramController(db).handle('/status')
+    assert 'NEW TRADES BLOCKED: drawdown limit' in status
+    assert '$78.91' in status
