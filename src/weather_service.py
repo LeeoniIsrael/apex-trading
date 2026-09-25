@@ -580,7 +580,7 @@ class WeatherService:
                 probability_change=side_probability-prior['probability'] if new_observation else None,
                 book_change=(edge.executable_price_cents-prior['price_cents'])/100 if new_observation else None,
                 latest_bid=book.best_bid(side))
-            if control:
+            if control or (self.live is not None and spec.ticker in open_tickers):
                 continue
             if decision.action.value not in {"BUY_YES", "BUY_NO"}:
                 continue

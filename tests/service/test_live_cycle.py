@@ -113,3 +113,17 @@ def test_live_risk_uses_exact_audited_cost_and_rejects_bad_state(tmp_path,monkey
         result=live_cycle_state(service.live,paper,datetime.now(timezone.utc))
         assert result.exposure==.607 and result.cities=={'Austin':.607}
         assert result.cash==99.393 and result.tickers==frozenset({'TEST'})
+
+
+def test_existing_live_position_is_researched_but_not_submitted_again(tmp_path,monkeypatch):
+    from decimal import Decimal
+    from src.execution.portfolio_audit import PortfolioAudit
+    service,client,paper,live=cycle(tmp_path,monkeypatch)
+    service.live.audit=PortfolioAudit(Decimal('99.1664'),Decimal('.8336'),Decimal(0),
+        {'TEST':{'side':'yes','contracts':2,'cost':Decimal('.8336')}},1,1)
+    service.live.reconcile=lambda:service.live.audit
+    result=service.run_once()
+    assert result['predictions']==1 and result['live_orders']==0
+    assert not client.calls
+    with paper.connect() as c:
+        assert c.execute('SELECT COUNT(*) FROM research_candidates').fetchone()[0]>=2

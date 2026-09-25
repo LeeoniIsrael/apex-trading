@@ -238,3 +238,23 @@ orders and no initial account audit. Telegram alone was active. Corrected the
 operator instructions to assign marker ownership to apex-weather before changing
 mode. The agent did not change marker ownership or restart the live worker; that
 fix would permit real trading and is handed to the operator.
+
+## First production NO-fill reconciliation defect
+
+Operator-reported live failures traced to V2 response interpretation. One real
+NO entry filled: 31 contracts at $0.06, fee $0.1224, total cost $1.9824; cash
+$96.0261 from initial $98.0085. V2 returned outcome_side=no/book_side=ask with
+legacy action=sell (order legacy side=yes, fill legacy side=no). The auditor
+incorrectly required legacy action=buy even with complete V2 fields.
+
+Use the complete outcome_side/book_side pair for V2; only records without either
+V2 field use legacy side/action. Partial or conflicting V2 direction fails closed.
+The audit still checks durable intent, exact quantity, price cap, signed exchange
+positions, fees and total cash. Added exact first-trade regression, restart tests,
+legacy-side variants, and malformed-direction rejection. The cycle also keeps
+researching held markets but does not send another entry for the same ticker.
+
+216 tests pass. Recovery must retain the existing pause and submit no orders.
+Any resumption of real trading is a separate operator action. The previous
+prelaunch tests did not exercise an actual V2 NO fill; this production incident
+exposed that coverage gap. Do not describe the earlier tests as proof against it.

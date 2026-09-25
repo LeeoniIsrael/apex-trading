@@ -80,3 +80,42 @@ def test_delayed_remote_order_blocks_then_recovers_without_new_submission(tmp_pa
     assert result.fills==1 and result.orders==1
     assert result.open_cost==Decimal('.8336')
     assert reconcile_portfolio(Database(db.path),client,99.1664,100)==result
+
+
+@pytest.mark.parametrize('legacy_side',['yes','no'])
+def test_v2_no_entry_can_report_sell_without_changing_economic_position(tmp_path,legacy_side):
+    db,c,order,fill=fixture(tmp_path,'no')
+    order.update(outcome_side='no',book_side='ask',side='yes',action='sell')
+    fill.update(outcome_side='no',book_side='ask',side=legacy_side,action='sell')
+    a=reconcile_portfolio(db,c,Decimal('99.1664'),100)
+    assert a.positions['TEST']['side']=='no'
+    assert a.positions['TEST']['contracts']==2
+    assert a.open_cost==Decimal('.8336')
+    assert reconcile_portfolio(Database(db.path),c,Decimal('99.1664'),100)==a
+
+
+@pytest.mark.parametrize('record_kind',['order','fill'])
+@pytest.mark.parametrize('direction',[{'outcome_side':'no'}, {'book_side':'ask'},
+    {'outcome_side':'no','book_side':'bid'}, {'outcome_side':'yes','book_side':'ask'},
+    {'outcome_side':'bad','book_side':'ask'}])
+def test_partial_or_conflicting_v2_direction_is_rejected(tmp_path,record_kind,direction):
+    db,c,order,fill=fixture(tmp_path,'no')
+    (order if record_kind=='order' else fill).update(direction)
+    with pytest.raises(RuntimeError): reconcile_portfolio(db,c,Decimal('99.1664'),100)
+
+
+def test_first_production_no_fill_exact_cash_and_fee_regression(tmp_path):
+    db,c,order,fill=fixture(tmp_path,'no')
+    with db.transaction() as con:
+        con.execute("UPDATE control_state SET value='98.0085' WHERE key='live_initial_cash'")
+        con.execute('UPDATE orders SET contracts=31,price_cents=6')
+    order.update(outcome_side='no',book_side='ask',side='yes',action='sell',
+                 initial_count_fp='31.00',fill_count_fp='31.00',status='executed')
+    fill.update(outcome_side='no',book_side='ask',side='no',action='sell',
+                count_fp='31.00',yes_price_dollars='.9400',no_price_dollars='.0600',fee_cost='.122400')
+    c.get_positions=lambda **kw:{'market_positions':[{'ticker':'TEST','position_fp':'-31.00'}]}
+    audit=reconcile_portfolio(db,c,Decimal('96.0261'),100)
+    assert audit.open_cost==Decimal('1.982400')
+    assert audit.realized_pnl==0
+    assert audit.positions['TEST']['contracts']==31
+    assert reconcile_portfolio(Database(db.path),c,Decimal('96.0261'),100)==audit

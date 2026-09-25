@@ -51,6 +51,23 @@ class PortfolioAudit:
     fills: int
 
 
+def entry_side(record):
+    """Interpret V2 YES-book direction, or a complete legacy buy record.
+
+An ask on the YES book opens NO exposure. Legacy action/side fields can call
+that a sale even when outcome_side is NO; do not mix those representations.
+The complete audit still verifies quantity, entry price, signed position and cash.
+"""
+    if 'outcome_side' in record or 'book_side' in record:
+        side, book = record.get('outcome_side'), record.get('book_side')
+        if (side, book) not in (('yes', 'bid'), ('no', 'ask')):
+            raise RuntimeError('invalid or incomplete V2 entry direction')
+        return side
+    if record.get('action') != 'buy' or record.get('side') not in ('yes', 'no'):
+        raise RuntimeError('unsupported legacy entry direction')
+    return record['side']
+
+
 def reconcile_portfolio(database, client, cash, capital_limit):
     orders = pages(client.get_orders, 'orders')
     fills = pages(client.get_fills, 'fills')
@@ -68,9 +85,9 @@ def reconcile_portfolio(database, client, cash, capital_limit):
                     raise RuntimeError('untracked remote order')
                 continue
             local = known[client_id]
-            side = order.get('outcome_side', order.get('side'))
+            side = entry_side(order)
             if (order.get('ticker') != local['ticker'] or side != local['side']
-                or order.get('action') != 'buy'
+                or local['action'] != 'buy'
                 or whole(order.get('initial_count_fp')) != local['contracts']):
                 raise RuntimeError('remote order differs from durable intent')
             remote_id = order.get('order_id')
@@ -103,12 +120,12 @@ def reconcile_portfolio(database, client, cash, capital_limit):
             if order is None or order['client_order_id'] not in known:
                 raise RuntimeError('orphan remote fill')
             local = known[order['client_order_id']]
-            side = fill.get('outcome_side', fill.get('side'))
+            side = entry_side(fill)
             qty = whole(fill.get('count_fp'))
             price = number(fill.get(side+'_price_dollars')) if side in ('yes','no') else Decimal(-1)
             fee = number(fill.get('fee_cost'))
             if (qty <= 0 or not 0 < price < 1 or fee < 0
-                or fill.get('action') != 'buy' or side != local['side']
+                or local['action'] != 'buy' or side != local['side']
                 or fill.get('ticker', fill.get('market_ticker')) != local['ticker']
                 or price*100 > local['price_cents']):
                 raise RuntimeError('remote fill violates durable intent')
