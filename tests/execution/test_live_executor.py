@@ -1,85 +1,93 @@
-from pathlib import Path
+import json
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
-from src.execution.live_executor import LiveExecutor
+from src.execution.live_executor import LiveExecutor, authenticated_balance
 from src.storage.database import Database
 from src.weather_config import WeatherSettings
 
 
 class FakeClient:
-    def __init__(self):
-        self.calls = []
-
-    def create_order(self, **kwargs):
+    signer = object()
+    def __init__(self): self.calls=[]
+    def get_balance(self): return {'balance':10000}
+    def get_orders(self): return {'orders':[]}
+    def get_positions(self): return {'market_positions':[]}
+    def create_order(self,**kwargs):
         self.calls.append(kwargs)
-        return {"order": {"status": "resting", "fill_count": 0}}
-
-    def get_orders(self):
-        return {"orders": []}
-
-    def get_positions(self):
-        return {"market_positions": []}
+        return {'order':{'status':'resting','fill_count':0}}
 
 
-class UntrackedPositionClient(FakeClient):
-    def get_positions(self):
-        return {"market_positions": [{
-            "ticker": "UNKNOWN", "position": 3,
-            "market_exposure_dollars": "1.23", "realized_pnl_dollars": "0.00",
-        }]}
+def setup(tmp_path, monkeypatch):
+    paper=Database(tmp_path/'paper'); paper.migrate()
+    live=Database(tmp_path/'live'); live.migrate()
+    marker=tmp_path/'marker'
+    marker.write_text(json.dumps({'confirmation':'I_ACCEPT_LIVE_RISK','paper_database':str(paper.path.resolve()),'live_database':str(live.path.resolve())}))
+    settings=WeatherSettings(_env_file=None,trading_mode='live',database_path=paper.path,live_database_path=live.path,live_enablement_path=marker)
+    monkeypatch.setattr('src.execution.live_executor.database_readiness',lambda *a:(True,(),None))
+    now=datetime.now(timezone.utc)
+    market={'ticker':'TEST','rules_primary':f'Maximum temperature at CLIAUS for {now.strftime("%b %d, %Y")} is less than 96 according to The Weather Company.','_fee_type':'quadratic','_fee_multiplier':1}
+    with paper.transaction() as c:
+        c.execute('INSERT INTO markets(ticker,raw_json,observed_at) VALUES(?,?,?)',('TEST',json.dumps(market),now.isoformat()))
+        c.execute("INSERT INTO research_candidates(ticker,event_key,captured_at,split,model_version,side,price_cents,contracts,fee_usd,probability,net_ev_usd,baseline_action,final_action,source,station,city,market_type,price_bucket,time_bucket,seconds_to_close,observation_age,liquidity,lag_candidate,control) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",('TEST','event',now.isoformat(),'holdout','v1','yes',40,2,.04,.9,.96,'BUY_YES','BUY_YES','twc','KAUS','Austin','high','>10c','early',3600,60,2,0,0))
+    # Keep date boundaries independent of the time this test runs.
+    from datetime import timedelta
+    monkeypatch.setattr('src.execution.live_executor.parse_settlement_spec', lambda raw:SimpleNamespace(tradeable=True,observation_window_end=now+timedelta(hours=2),city='Austin'))
+    client=FakeClient()
+    return LiveExecutor(settings,client,live),client,paper,live,settings
 
 
-def test_live_executor_requires_persisted_enablement(tmp_path: Path):
-    database = Database(tmp_path / "db.sqlite3")
-    database.migrate()
-    settings = WeatherSettings(
-        trading_mode="paper", database_path=database.path,
-        live_enablement_path=tmp_path / "missing",
-    )
-    with pytest.raises(RuntimeError, match="not explicitly enabled"):
-        LiveExecutor(settings, FakeClient(), database)  # type: ignore[arg-type]
+def submit(executor, **overrides):
+    args=dict(ticker='TEST',side='yes',price_cents=40,contracts=2,client_order_id='stable')
+    args.update(overrides)
+    return executor.submit_buy(**args)
 
 
-def test_live_order_is_idempotently_recorded(tmp_path: Path):
-    enablement = tmp_path / "LIVE_ENABLED"
-    enablement.write_text("enabled")
-    database = Database(tmp_path / "db.sqlite3")
-    database.migrate()
-    settings = WeatherSettings(
-        trading_mode="live", database_path=database.path,
-        live_enablement_path=enablement,
-    )
-    client = FakeClient()
-    executor = LiveExecutor(settings, client, database)  # type: ignore[arg-type]
-    executor.submit_buy(
-        ticker="TEST", side="yes", price_cents=40, contracts=2,
-        client_order_id="stable-id",
-    )
-    with pytest.raises(RuntimeError, match="duplicate client order"):
-        executor.submit_buy(
-            ticker="TEST", side="yes", price_cents=40, contracts=2,
-            client_order_id="stable-id",
-        )
-    assert len(client.calls) == 1
+def test_paper_cannot_instantiate_live(tmp_path):
+    settings=WeatherSettings(_env_file=None,database_path=tmp_path/'paper',live_enablement_path=tmp_path/'absent')
+    with pytest.raises(RuntimeError,match='not explicitly enabled'):
+        LiveExecutor(settings,FakeClient(),Database(tmp_path/'live'))
 
 
-def test_live_reconciliation_blocks_unknown_remote_cost_basis(tmp_path: Path):
-    enablement = tmp_path / "LIVE_ENABLED"
-    enablement.write_text("enabled")
-    database = Database(tmp_path / "db.sqlite3")
-    database.migrate()
-    settings = WeatherSettings(
-        trading_mode="live", database_path=database.path,
-        live_enablement_path=enablement,
-    )
-    executor = LiveExecutor(
-        settings, UntrackedPositionClient(), database,  # type: ignore[arg-type]
-    )
-    with pytest.raises(RuntimeError, match="manual cost-basis reconciliation"):
-        executor.reconcile()
-    with database.connect() as connection:
-        position = connection.execute(
-            "SELECT contracts,average_price_cents FROM positions WHERE ticker='UNKNOWN'"
-        ).fetchone()
-    assert tuple(position) == (3, 0.0)
+def test_live_idempotency_survives_restart(tmp_path,monkeypatch):
+    ex,client,paper,live,s=setup(tmp_path,monkeypatch)
+    submit(ex)
+    ex=LiveExecutor(s,client,live)
+    with pytest.raises(RuntimeError,match='duplicate'): submit(ex)
+    assert len(client.calls)==1
+    assert client.calls[0]['client_order_id']=='LIVE-stable'
+
+
+@pytest.mark.parametrize('block',['stop','marker','stale','balance','readiness','order_limit','unknown_position'])
+def test_guards_prevent_any_post(tmp_path,monkeypatch,block):
+    ex,client,paper,live,s=setup(tmp_path,monkeypatch)
+    if block=='stop':
+        with paper.transaction() as c: c.execute("UPDATE control_state SET value='true' WHERE key='emergency_stop'")
+    elif block=='marker': s.live_enablement_path.unlink()
+    elif block=='stale':
+        with paper.transaction() as c: c.execute("UPDATE research_candidates SET captured_at='2000-01-01T00:00:00+00:00'")
+    elif block=='balance': client.get_balance=lambda:{'balance':1}
+    elif block=='readiness': monkeypatch.setattr('src.execution.live_executor.database_readiness',lambda *a:(False,('insufficient_markets',),None))
+    elif block=='order_limit': s.live_max_order_usd=.1
+    else: client.get_positions=lambda:{'market_positions':[{'position':1}]}
+    with pytest.raises(RuntimeError): submit(ex)
+    assert not client.calls
+
+
+def test_uncertain_post_is_never_retried(tmp_path,monkeypatch):
+    ex,client,paper,live,s=setup(tmp_path,monkeypatch)
+    def fail(**kw): client.calls.append(kw); raise TimeoutError()
+    client.create_order=fail
+    with pytest.raises(RuntimeError,match='uncertain'): submit(ex)
+    with pytest.raises(RuntimeError,match='duplicate'): submit(ex)
+    with pytest.raises(RuntimeError,match='ambiguous'): LiveExecutor(s,client,live)
+    assert len(client.calls)==1
+
+
+def test_balance_rejects_missing_auth_or_nan():
+    c=FakeClient(); c.signer=None
+    with pytest.raises(RuntimeError): authenticated_balance(c)
+    c.signer=object(); c.get_balance=lambda:{'balance_dollars':'NaN'}
+    with pytest.raises(RuntimeError): authenticated_balance(c)

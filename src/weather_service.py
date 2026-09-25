@@ -85,7 +85,9 @@ class WeatherService:
                 signer=KalshiSigner(settings.kalshi_api_key_id,
                                     settings.kalshi_private_key_path),
             )
-            self.live = LiveExecutor(settings, authenticated, self.database)
+            live_database = Database(settings.live_database_path)
+            live_database.migrate()
+            self.live = LiveExecutor(settings, authenticated, live_database)
             self.live.reconcile()
         self.twc = WeatherCompanyProvider()
         self.metar = MetarProvider()
@@ -387,72 +389,6 @@ class WeatherService:
                     "INSERT INTO orderbook_snapshots(ticker,captured_at,orderbook_json) VALUES(?,?,?)",
                     (spec.ticker, now.isoformat(), json.dumps(raw_book)),
                 )
-
-            with self.database.connect() as connection:
-                position = connection.execute(
-                    "SELECT side,contracts,average_price_cents FROM positions "
-                    "WHERE ticker=? AND contracts>0", (spec.ticker,)
-                ).fetchone()
-            if position:
-                held_side = str(position["side"])
-                held_probability = (estimate.probability if held_side == "yes"
-                                    else 1 - estimate.probability)
-                bid = book.best_bid(held_side)  # executable sale price
-                exit_eval = evaluate_exit(
-                    contracts=int(position["contracts"]),
-                    model_probability=held_probability,
-                    executable_bid_cents=bid,
-                    fee_rate=fee_rate,
-                )
-                if exit_eval.should_exit and bid is not None and self.live is not None:
-                    exit_client_id = str(uuid.uuid4())
-                    if self.live is not None:
-                        self.live.submit_order(
-                            ticker=spec.ticker, side=held_side, action="sell",
-                            price_cents=bid, contracts=int(position["contracts"]),
-                            client_order_id=exit_client_id,
-                        )
-                    else:
-                        order_id = f"PAPER-EXIT-{exit_client_id}"
-                        contracts_held = int(position["contracts"])
-                        with self.database.connect() as connection:
-                            entry_fees = float(connection.execute(
-                                "SELECT COALESCE(SUM(fee_usd),0) FROM fills "
-                                "WHERE ticker=? AND side=?",
-                                (spec.ticker, held_side),
-                            ).fetchone()[0])
-                        realized = ((bid - float(position["average_price_cents"]))
-                                    * contracts_held / 100 - exit_eval.exit_fee_usd - entry_fees)
-                        with self.database.transaction() as connection:
-                            connection.execute(
-                                "INSERT INTO orders(id,client_order_id,ticker,side,action,price_cents,"
-                                "contracts,filled_contracts,status,paper,created_at,updated_at) "
-                                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                                (order_id, exit_client_id, spec.ticker, held_side, "sell", bid,
-                                 contracts_held, contracts_held, "filled", 1,
-                                 now.isoformat(), now.isoformat()),
-                            )
-                            connection.execute(
-                                "INSERT INTO fills(id,order_id,ticker,side,contracts,price_cents,"
-                                "fee_usd,filled_at) VALUES(?,?,?,?,?,?,?,?)",
-                                (f"FILL-{exit_client_id}", order_id, spec.ticker, held_side,
-                                 contracts_held, bid, exit_eval.exit_fee_usd, now.isoformat()),
-                            )
-                            connection.execute(
-                                "UPDATE positions SET contracts=0,realized_pnl_usd=realized_pnl_usd+?,"
-                                "updated_at=? WHERE ticker=? AND side=?",
-                                (realized, now.isoformat(), spec.ticker, held_side),
-                            )
-                    action = "SELL_YES" if held_side == "yes" else "SELL_NO"
-                    with self.database.transaction() as connection:
-                        connection.execute(
-                            "INSERT INTO decisions(ticker,decided_at,action,reason_codes,edge_json) "
-                            "VALUES(?,?,?,?,?)", (spec.ticker, now.isoformat(), action,
-                            json.dumps(["updated_ev_exit"]), json.dumps(asdict(exit_eval))),
-                        )
-                    decisions += 1
-                    paper_orders += 1
-                    continue
 
             side = "yes" if estimate.probability >= 0.5 else "no"
             side_probability = estimate.probability if side == "yes" else 1 - estimate.probability

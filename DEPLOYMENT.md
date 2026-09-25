@@ -49,3 +49,57 @@ scripts/logs.sh
 The deploy script syncs code but excludes `.env`, keys, databases and git state.
 It installs the systemd unit, restarts in paper mode, and leaves persistent data
 under `/var/lib/apex-weather` untouched.
+
+## Readiness and explicitly gated live preparation
+
+Keep `TRADING_MODE=paper` throughout implementation and validation. Use:
+
+```bash
+apex-weather accounting
+apex-weather research
+apex-weather readiness
+apex-weather balance-test
+```
+
+The balance test is read-only, validates an authenticated response and records
+only a pass/fail check. It never prints credentials or account balances.
+Balance units follow the [Kalshi balance API](https://docs.kalshi.com/api-reference/portfolio/get-balance).
+Bid complements follow the [official orderbook documentation](https://docs.kalshi.com/getting_started/orderbook_responses).
+Paper and live databases must differ; set `LIVE_DATABASE_PATH` explicitly.
+
+The following command is **documentation only; it was not executed**:
+
+```bash
+apex-weather enable-live --confirm I_ACCEPT_LIVE_RISK
+```
+
+It refuses unless all readiness checks pass and a new authenticated balance
+check clears the floor. It writes a mode-600 JSON marker bound to the configured
+paper and live database paths. It does not change `TRADING_MODE`. Activation
+requires a separate operator decision and environment change in a later turn.
+
+**Current live blockers:** remote position/fill cost-basis reconciliation and
+pagination are deliberately fail-closed; this adapter is not ready for unattended
+real-money operation. Unknown remote positions, ambiguous POSTs, or pagination
+stop trading. The operator must also validate and record fresh (<24 hours)
+`idempotency`, `emergency_stop`, `telegram_alerts`, and `equity_reporting` evidence
+in `verification_checks`. There is no chat/API shortcut for marking these passed.
+Do not fabricate these records to enable trading. Historical health incidents
+currently require investigation and prevent promotion; there is no automatic
+waiver. Collect at least 200 prospective independent holdout events and 5,000
+useful research snapshots; old repeated predictions do not satisfy these gates.
+
+## Emergency stop and recovery
+
+```bash
+apex-weather emergency-stop
+sudo systemctl stop apex-weather
+```
+
+This latches pause/stop in both databases and removes the live marker. It prevents
+new submissions; it does not claim to cancel previously accepted remote orders.
+Cancel outstanding orders in Kalshi, verify orders/positions read-only, reconcile
+all fills and cost basis, investigate the cause, and rerun readiness before
+manual local recovery. Never clear an ambiguous submission by issuing a new ID.
+POST requests are not automatically retried. All attempted IDs remain reserved
+across restarts, including failed or uncertain requests.

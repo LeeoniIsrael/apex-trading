@@ -51,21 +51,22 @@ class KalshiClientV2:
         if authenticated and self.signer is None:
             raise KalshiAPIError("authenticated request attempted without credentials")
         last_error: Exception | None = None
-        for attempt in range(self.max_attempts):
+        attempts = 1 if method.upper() in {"POST", "PUT"} else self.max_attempts
+        for attempt in range(attempts):
             headers = self.signer.headers(method, path) if authenticated and self.signer else {}
             try:
                 response = self.session.request(
                     method, f"{self.base_url}{endpoint}", params=params, json=json_body,
                     headers=headers, timeout=self.timeout_seconds,
                 )
-                if response.status_code in {429, 500, 502, 503, 504} and attempt + 1 < self.max_attempts:
+                if response.status_code in {429, 500, 502, 503, 504} and attempt + 1 < attempts:
                     time.sleep(min(0.5 * 2**attempt, 2.0))
                     continue
                 response.raise_for_status()
                 return response.json()
             except (requests.Timeout, requests.ConnectionError, requests.HTTPError) as exc:
                 last_error = exc
-                if attempt + 1 < self.max_attempts and not (
+                if attempt + 1 < attempts and not (
                     isinstance(exc, requests.HTTPError)
                     and exc.response is not None
                     and exc.response.status_code not in {429, 500, 502, 503, 504}
