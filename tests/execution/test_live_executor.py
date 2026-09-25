@@ -34,7 +34,7 @@ def setup(tmp_path, monkeypatch):
         c.execute("INSERT INTO research_candidates(ticker,event_key,captured_at,split,model_version,side,price_cents,contracts,fee_usd,probability,net_ev_usd,baseline_action,final_action,source,station,city,market_type,price_bucket,time_bucket,seconds_to_close,observation_age,liquidity,lag_candidate,control) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",('TEST','event',now.isoformat(),'holdout','v1','yes',40,2,.04,.9,.96,'BUY_YES','BUY_YES','twc','KAUS','Austin','high','>10c','early',3600,60,2,0,0))
     # Keep date boundaries independent of the time this test runs.
     from datetime import timedelta
-    monkeypatch.setattr('src.execution.live_executor.parse_settlement_spec', lambda raw:SimpleNamespace(tradeable=True,observation_window_end=now+timedelta(hours=2),city='Austin'))
+    monkeypatch.setattr('src.execution.live_executor.parse_settlement_spec', lambda raw:SimpleNamespace(tradeable=True,observation_window_end=now+timedelta(hours=2),last_trading_time=now+timedelta(hours=2),city='Austin'))
     client=FakeClient()
     return LiveExecutor(settings,client,live),client,paper,live,settings
 
@@ -60,7 +60,7 @@ def test_live_idempotency_survives_restart(tmp_path,monkeypatch):
     assert client.calls[0]['client_order_id']=='LIVE-stable'
 
 
-@pytest.mark.parametrize('block',['stop','marker','stale','balance','readiness','order_limit','unknown_position'])
+@pytest.mark.parametrize('block',['stop','marker','stale','balance','readiness','order_limit','unknown_position','total_limit','city_limit','daily_count','daily_loss','drawdown','pagination','auth'])
 def test_guards_prevent_any_post(tmp_path,monkeypatch,block):
     ex,client,paper,live,s=setup(tmp_path,monkeypatch)
     if block=='stop':
@@ -71,7 +71,20 @@ def test_guards_prevent_any_post(tmp_path,monkeypatch,block):
     elif block=='balance': client.get_balance=lambda:{'balance':1}
     elif block=='readiness': monkeypatch.setattr('src.execution.live_executor.database_readiness',lambda *a:(False,('insufficient_markets',),None))
     elif block=='order_limit': s.live_max_order_usd=.1
-    else: client.get_positions=lambda:{'market_positions':[{'position':1}]}
+    elif block=='unknown_position': client.get_positions=lambda:{'market_positions':[{'position':1}]}
+    elif block=='total_limit': s.live_max_exposure_usd=.1
+    elif block=='city_limit': s.live_max_city_exposure_usd=.1
+    elif block=='daily_count':
+        s.live_max_daily_orders=1
+        with live.transaction() as c:
+            stamp=datetime.now(timezone.utc).isoformat()
+            c.execute('INSERT INTO orders VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',('old','LIVE-old','TEST','yes','buy',1,1,0,'cancelled',0,stamp,stamp))
+    elif block in ('daily_loss','drawdown'):
+        with live.transaction() as c:
+            key='live_peak' if block=='drawdown' else 'live_day_'+datetime.now(timezone.utc).date().isoformat()
+            c.execute('INSERT INTO control_state VALUES(?,?,?)',(key,'200',datetime.now(timezone.utc).isoformat()))
+    elif block=='pagination': client.get_orders=lambda:{'orders':[],'cursor':'next'}
+    elif block=='auth': client.signer=None
     with pytest.raises(RuntimeError): submit(ex)
     assert not client.calls
 

@@ -76,3 +76,17 @@ def test_position_exit_uses_updated_forward_ev_not_stop_loss():
         contracts=10, model_probability=.80, executable_bid_cents=40,
     )
     assert not hold.should_exit
+
+
+def test_migrate_existing_database_preserves_orders_and_costs(tmp_path):
+    from src.storage.database import MIGRATIONS
+    db=Database(tmp_path/'upgrade')
+    with db.transaction() as c:
+        for version,sql in MIGRATIONS[:3]:
+            c.executescript(sql)
+            c.execute('INSERT INTO schema_migrations(version) VALUES(?)',(version,))
+        c.execute("INSERT INTO costs(incurred_at,category,amount_usd,description) VALUES('2026-09-23','infrastructure',21.09,'existing')")
+    db.migrate(); db.migrate()
+    with db.connect() as c:
+        assert c.execute('SELECT SUM(amount_usd) FROM costs').fetchone()[0]==21.09
+        assert c.execute('SELECT COUNT(*) FROM schema_migrations').fetchone()[0]==len(MIGRATIONS)

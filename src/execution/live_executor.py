@@ -105,6 +105,7 @@ class LiveExecutor:
             raw = json.loads(market[0]); spec = parse_settlement_spec(raw)
             age = (now-datetime.fromisoformat(candidate['captured_at'])).total_seconds()
             if (not spec.tradeable or not spec.observation_window_end or now >= spec.observation_window_end
+                or not getattr(spec, 'last_trading_time', None) or now >= spec.last_trading_time
                 or not 0 <= age <= 60 or candidate['observation_age']+age > 7200
                 or candidate['final_action'] != 'BUY_'+side.upper() or candidate['net_ev_usd'] <= 0
                 or price_cents > candidate['price_cents'] or contracts > candidate['contracts']):

@@ -229,6 +229,10 @@ class WeatherService:
                             )
 
     def run_once(self) -> dict[str, int]:
+        if self.settings.monthly_vps_cost_usd:
+            month=datetime.now(timezone.utc).strftime('%Y-%m')
+            self.cost_tracker.record('infrastructure',self.settings.monthly_vps_cost_usd,
+                                     'Configured monthly VPS and IPv4 cost',f'vps-{month}')
         if self._control_blocked():
             return {"markets": 0, "current_tradeable_markets": 0,
                     "predictions": 0, "decisions": 0, "paper_orders": 0}
@@ -390,6 +394,14 @@ class WeatherService:
                     (spec.ticker, now.isoformat(), json.dumps(raw_book)),
                 )
 
+            with self.database.transaction() as connection:
+                for held_side in ('yes', 'no'):
+                    bid_now=book.best_bid(held_side)
+                    if bid_now is not None:
+                        connection.execute("UPDATE research_candidates SET min_bid_cents=MIN(COALESCE(min_bid_cents,?),?) WHERE ticker=? AND side=?", (bid_now,bid_now,spec.ticker,held_side))
+                already_settled=connection.execute("SELECT 1 FROM settlements WHERE ticker=? AND final=1",(spec.ticker,)).fetchone()
+            if already_settled:
+                continue
             side = "yes" if estimate.probability >= 0.5 else "no"
             side_probability = estimate.probability if side == "yes" else 1 - estimate.probability
             best_ask = book.best_ask(side)

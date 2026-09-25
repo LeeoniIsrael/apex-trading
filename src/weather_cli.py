@@ -49,6 +49,7 @@ def main() -> int:
             with db.transaction() as c:
                 for key in ('emergency_stop', 'paused'):
                     c.execute('INSERT INTO control_state VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at', (key,'true',datetime.now(timezone.utc).isoformat()))
+                c.execute("INSERT INTO health_events(occurred_at,severity,component,code,message,details_json) VALUES(?,?,?,?,?,?)", (datetime.now(timezone.utc).isoformat(),'critical','controls','emergency_stop','Emergency stop latched','{}'))
         settings.live_enablement_path.unlink(missing_ok=True)
         print("Emergency stop latched. No new orders. Cancel existing remote orders through Kalshi and reconcile before recovery.")
         return 0

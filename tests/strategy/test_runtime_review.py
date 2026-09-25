@@ -61,3 +61,15 @@ def test_runtime_reviewer_budget_fails_before_api_call(tmp_path: Path):
     with pytest.raises(RuntimeReviewBudgetExceeded):
         reviewer.review({"ticker": "TEST"})
     assert fake.responses.kwargs is None
+
+
+def test_runtime_timeout_retains_budget_reservation(tmp_path):
+    tracker=_tracker(tmp_path)
+    fake=FakeOpenAI()
+    def timeout(**kwargs): raise TimeoutError()
+    fake.responses.parse=timeout
+    reviewer=RuntimeExceptionReviewer(api_key='unused',cost_tracker=tracker,
+        daily_budget_usd=.1,monthly_budget_usd=1,client=fake)
+    with pytest.raises(TimeoutError): reviewer.review({'conflict':True})
+    with tracker.database.connect() as c:
+        assert c.execute("SELECT SUM(amount_usd) FROM costs WHERE category='openai_api'").fetchone()[0]>0

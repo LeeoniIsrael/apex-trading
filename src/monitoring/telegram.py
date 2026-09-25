@@ -27,6 +27,9 @@ class TelegramController:
                 (key, value, datetime.now(timezone.utc).isoformat()),
             )
 
+            if key == 'emergency_stop' and value == 'true':
+                connection.execute("INSERT INTO health_events(occurred_at,severity,component,code,message,details_json) VALUES(?,?,?,?,?,?)", (datetime.now(timezone.utc).isoformat(),'critical','controls','emergency_stop','Emergency stop latched','{}'))
+
     def handle(self, command: str) -> str:
         command = command.strip().split()[0].lower() if command.strip() else "/status"
         with self.database.connect() as connection:

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import uuid
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Any
 
@@ -55,19 +57,23 @@ class RuntimeExceptionReviewer:
             default_output if output_price_per_million is None else output_price_per_million
         )
         self.client = client or OpenAI(
-            api_key=api_key, timeout=timeout_seconds, max_retries=1,
+            api_key=api_key, timeout=timeout_seconds, max_retries=0,
         )
 
     def review(self, state: dict[str, Any]) -> RuntimeReviewResult:
         compact_state = json.dumps(state, separators=(",", ":"), sort_keys=True)
-        # Reserve a conservative mill before the request; actual usage is booked below.
-        reserve = max(0.001, len(compact_state) / 4 * self.input_price_per_million / 1_000_000)
-        if not self.cost_tracker.can_spend_categories(
-            ("jev_api", "openai_api"), reserve,
-            daily_limit=self.daily_budget_usd,
-            monthly_limit=self.monthly_budget_usd,
-        ):
-            raise RuntimeReviewBudgetExceeded("runtime OpenAI budget exhausted")
+        # Reserve schema/prompt overhead and the maximum output before submission.
+        reserve = ((len(compact_state.encode('utf-8')) + 4096) * self.input_price_per_million
+                   + 512 * self.output_price_per_million) / 1_000_000
+        reservation='openai-reservation-'+str(uuid.uuid4())
+        with self.cost_tracker.database.transaction() as c:
+            c.execute('BEGIN IMMEDIATE')
+            if not self.cost_tracker.can_spend_categories(
+                ('jev_api','openai_api'), reserve,
+                daily_limit=self.daily_budget_usd, monthly_limit=self.monthly_budget_usd):
+                raise RuntimeReviewBudgetExceeded('runtime OpenAI budget exhausted')
+            c.execute('INSERT INTO costs(incurred_at,category,amount_usd,description,external_id) VALUES(?,?,?,?,?)',
+                      (datetime.now(timezone.utc).isoformat(),'openai_api',reserve,'Runtime review budget reservation',reservation))
         response = self.client.responses.parse(
             model=self.model,
             reasoning={"effort": "none"},
@@ -83,6 +89,8 @@ class RuntimeExceptionReviewer:
                 {"role": "user", "content": compact_state},
             ],
             text_format=ExceptionReview,
+            max_output_tokens=512,
+            store=False,
         )
         parsed = response.output_parsed
         if parsed is None:
@@ -94,8 +102,9 @@ class RuntimeExceptionReviewer:
             input_tokens * self.input_price_per_million
             + output_tokens * self.output_price_per_million
         ) / 1_000_000
-        self.cost_tracker.record(
-            "openai_api", cost, f"Runtime exception review using {self.model}",
-            f"openai-{response.id}",
-        )
+        if usage is None:
+            raise ValueError('OpenAI review usage is unknown; budget remains reserved')
+        with self.cost_tracker.database.transaction() as c:
+            c.execute('UPDATE costs SET amount_usd=?,description=? WHERE external_id=?',
+                      (cost,'Runtime review measured usage',reservation))
         return RuntimeReviewResult(review=parsed, cost_usd=cost, model=self.model)

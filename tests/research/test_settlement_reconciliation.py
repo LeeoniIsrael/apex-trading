@@ -67,3 +67,30 @@ def test_official_result_settles_paper_position_and_labels_predictions(tmp_path:
     assert position["contracts"] == 0
     assert position["realized_pnl_usd"] == expected
     assert actual_outcome == outcome
+
+
+def test_partial_fills_multiple_sides_and_unknown_rules(tmp_path):
+    from tests.research.test_accounting import fill
+    from src.research.accounting import paper_account
+    db=Database(tmp_path/'db'); db.migrate()
+    market={'ticker':'TEST','rules_primary':'Maximum temperature at CLIAUS for Sep 23, 2026 is less than 96 according to The Weather Company.'}
+    with db.transaction() as c:
+        c.execute('INSERT INTO markets(ticker,raw_json,observed_at) VALUES(?,?,?)',('TEST',json.dumps(market),'2026-09-23'))
+        fill(c,'a','yes',4,25,.08)
+        fill(c,'b','yes',6,50,.12)
+        fill(c,'c','no',2,25,.02)
+        c.execute('INSERT INTO positions VALUES(?,?,?,?,?,?)',('TEST','yes',10,40,0,'2026-09-23'))
+        c.execute('INSERT INTO positions VALUES(?,?,?,?,?,?)',('TEST','no',2,25,0,'2026-09-23'))
+    reconciler=SettlementReconciler(db,nws_user_agent='test',twc=FakeTWC(),nws=NoNWS())
+    assert reconciler.reconcile()==1  # positions reconcile even without predictions
+    assert reconciler.reconcile()==0
+    a=paper_account(db,100)
+    assert a.realized_pnl==pytest.approx(5.28)
+    assert not a.discrepancies
+    with db.connect() as c:
+        assert c.execute("SELECT COUNT(*) FROM orders WHERE status='cancelled'").fetchone()[0]==3
+    unknown=Database(tmp_path/'unknown'); unknown.migrate()
+    with unknown.transaction() as c:
+        c.execute('INSERT INTO markets(ticker,raw_json,observed_at) VALUES(?,?,?)',('TEST',json.dumps({'ticker':'TEST','title':'Unknown rules'}),'2026-09-23'))
+        c.execute('INSERT INTO positions VALUES(?,?,?,?,?,?)',('TEST','yes',10,40,0,'2026-09-23'))
+    assert SettlementReconciler(unknown,nws_user_agent='test',twc=FakeTWC(),nws=NoNWS()).reconcile()==0
