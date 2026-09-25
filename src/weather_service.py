@@ -111,11 +111,17 @@ class WeatherService:
             )
 
     def _control_blocked(self) -> bool:
-        with self.database.connect() as connection:
-            states = dict(connection.execute(
-                "SELECT key,value FROM control_state WHERE key IN ('paused','emergency_stop')"
-            ).fetchall())
-        return states.get("paused") == "true" or states.get("emergency_stop") == "true"
+        databases = [self.database]
+        if self.live is not None:
+            databases.append(self.live.database)
+        for database in databases:
+            with database.connect() as connection:
+                states = dict(connection.execute(
+                    "SELECT key,value FROM control_state WHERE key IN ('paused','emergency_stop')"
+                ).fetchall())
+            if states.get("paused") != "false" or states.get("emergency_stop") != "false":
+                return True
+        return False
 
     def _station_data(
         self, station: WeatherStation, source: OfficialSource,
@@ -298,56 +304,63 @@ class WeatherService:
                 self._persist_inputs(
                     station, observations_fetched, (ensemble_fetched, nws_fetched),
                 )
-        with self.database.connect() as connection:
-            position_rows = connection.execute(
-                "SELECT p.ticker,p.contracts,p.average_price_cents,p.realized_pnl_usd,p.updated_at,"
-                "m.raw_json FROM positions p LEFT JOIN markets m ON m.ticker=p.ticker"
-            ).fetchall()
-            resting_rows = connection.execute(
-                "SELECT o.ticker,o.contracts,o.filled_contracts,o.price_cents,m.raw_json "
-                "FROM orders o LEFT JOIN markets m ON m.ticker=o.ticker "
-                "WHERE o.action='buy' AND o.status IN "
-                "('resting','partially_filled','submitting','unknown')"
-            ).fetchall()
-        total_exposure = sum(
-            float(row["contracts"]) * float(row["average_price_cents"]) / 100
-            for row in position_rows if row["contracts"] > 0
-        ) + sum(
-            max(0, int(row["contracts"]) - int(row["filled_contracts"]))
-            * int(row["price_cents"]) / 100 for row in resting_rows
-        )
-        open_tickers = {row["ticker"] for row in position_rows if row["contracts"] > 0}
-        open_tickers.update(row["ticker"] for row in resting_rows)
-        city_exposure: dict[str, float] = {}
-        for row in position_rows:
-            if row["contracts"] <= 0 or not row["raw_json"]:
-                continue
-            position_spec = parse_settlement_spec(json.loads(row["raw_json"]))
-            city = position_spec.city or "unknown"
-            city_exposure[city] = city_exposure.get(city, 0.0) + (
-                row["contracts"] * row["average_price_cents"] / 100
+        if self.live is not None:
+            from src.risk.live_state import live_cycle_state
+            state = live_cycle_state(self.live, self.database, now)
+            total_exposure, city_exposure, open_tickers = state.exposure, state.cities, set(state.tickers)
+            daily_pnl, drawdown, risk_equity = state.daily_cash_change, state.drawdown, state.cash
+        else:
+            with self.database.connect() as connection:
+                position_rows = connection.execute(
+                    "SELECT p.ticker,p.contracts,p.average_price_cents,p.realized_pnl_usd,p.updated_at,"
+                    "m.raw_json FROM positions p LEFT JOIN markets m ON m.ticker=p.ticker"
+                ).fetchall()
+                resting_rows = connection.execute(
+                    "SELECT o.ticker,o.contracts,o.filled_contracts,o.price_cents,m.raw_json "
+                    "FROM orders o LEFT JOIN markets m ON m.ticker=o.ticker "
+                    "WHERE o.action='buy' AND o.status IN "
+                    "('resting','partially_filled','submitting','unknown')"
+                ).fetchall()
+            total_exposure = sum(
+                float(row["contracts"]) * float(row["average_price_cents"]) / 100
+                for row in position_rows if row["contracts"] > 0
+            ) + sum(
+                max(0, int(row["contracts"]) - int(row["filled_contracts"]))
+                * int(row["price_cents"]) / 100 for row in resting_rows
             )
-        for row in resting_rows:
-            if not row["raw_json"]:
-                continue
-            order_spec = parse_settlement_spec(json.loads(row["raw_json"]))
-            city = order_spec.city or "unknown"
-            reserved = max(0, row["contracts"] - row["filled_contracts"]) * row["price_cents"] / 100
-            city_exposure[city] = city_exposure.get(city, 0.0) + reserved
-        today_prefix = now.date().isoformat()
-        daily_pnl = sum(
-            float(row["realized_pnl_usd"]) for row in position_rows
-            if str(row["updated_at"]).startswith(today_prefix)
-        )
-        account = paper_account(self.database, self.settings.bankroll, now=now)
-        drawdown = account.max_drawdown
-        daily_pnl = account.daily_pnl
-        with self.database.transaction() as connection:
-            connection.execute("INSERT OR REPLACE INTO equity_history VALUES(?,?,?)",
-                               (now.isoformat(), account.equity, drawdown))
-        if account.discrepancies:
-            self._record_health("error", "accounting", "ledger_discrepancy", ",".join(account.discrepancies))
-            return {"markets": len(specs), "predictions": 0, "decisions": 0, "paper_orders": 0}
+            open_tickers = {row["ticker"] for row in position_rows if row["contracts"] > 0}
+            open_tickers.update(row["ticker"] for row in resting_rows)
+            city_exposure: dict[str, float] = {}
+            for row in position_rows:
+                if row["contracts"] <= 0 or not row["raw_json"]:
+                    continue
+                position_spec = parse_settlement_spec(json.loads(row["raw_json"]))
+                city = position_spec.city or "unknown"
+                city_exposure[city] = city_exposure.get(city, 0.0) + (
+                    row["contracts"] * row["average_price_cents"] / 100
+                )
+            for row in resting_rows:
+                if not row["raw_json"]:
+                    continue
+                order_spec = parse_settlement_spec(json.loads(row["raw_json"]))
+                city = order_spec.city or "unknown"
+                reserved = max(0, row["contracts"] - row["filled_contracts"]) * row["price_cents"] / 100
+                city_exposure[city] = city_exposure.get(city, 0.0) + reserved
+            today_prefix = now.date().isoformat()
+            daily_pnl = sum(
+                float(row["realized_pnl_usd"]) for row in position_rows
+                if str(row["updated_at"]).startswith(today_prefix)
+            )
+            account = paper_account(self.database, self.settings.bankroll, now=now)
+            drawdown = account.max_drawdown
+            daily_pnl = account.daily_pnl
+            with self.database.transaction() as connection:
+                connection.execute("INSERT OR REPLACE INTO equity_history VALUES(?,?,?)",
+                                   (now.isoformat(), account.equity, drawdown))
+            if account.discrepancies:
+                self._record_health("error", "accounting", "ledger_discrepancy", ",".join(account.discrepancies))
+                return {"markets": len(specs), "predictions": 0, "decisions": 0, "paper_orders": 0}
+            risk_equity = account.equity
         predictions = decisions = paper_orders = 0
 
         for spec in current_specs:
@@ -439,7 +452,7 @@ class WeatherService:
                     city_exposure.get(spec.city or "unknown", 0.0),
                     daily_pnl, drawdown,
                 ),
-                RiskPolicy(bankroll_usd=max(.01, min(self.settings.bankroll, account.equity))), exposure,
+                RiskPolicy(bankroll_usd=max(.01, min(self.settings.bankroll, risk_equity))), exposure,
             )
             confidence = max(0.0, 1.0 - estimate.entropy_bits)
             external_vetoes: tuple[str, ...] = ()
@@ -625,7 +638,9 @@ class WeatherService:
                     )
         return {
             "markets": len(specs), "current_tradeable_markets": len(current_specs),
-            "predictions": predictions, "decisions": decisions, "paper_orders": paper_orders,
+            "predictions": predictions, "decisions": decisions,
+            "paper_orders": paper_orders if self.live is None else 0,
+            "live_orders": paper_orders if self.live is not None else 0,
         }
 
     def recommended_poll_seconds(self, now: datetime | None = None) -> int:

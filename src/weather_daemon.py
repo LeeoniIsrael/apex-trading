@@ -15,6 +15,21 @@ from src.weather_service import WeatherService
 logger = logging.getLogger(__name__)
 
 
+def stop_after_live_cycle_failure(service) -> None:
+    """Persist a live pause and an alert; never retry an uncertain trade blindly."""
+    if service.live is None:
+        return
+    with service.live.database.transaction() as connection:
+        stamp = datetime.now(timezone.utc).isoformat()
+        connection.execute('INSERT OR REPLACE INTO control_state VALUES(?,?,?)',
+                           ('paused', 'true', stamp))
+        connection.execute(
+            'INSERT INTO health_events(occurred_at,severity,component,code,message,details_json) '
+            'VALUES(?,?,?,?,?,?)',
+            (stamp, 'critical', 'live', 'cycle_failed',
+             'Trading paused after a failed cycle; operator reconciliation required', '{}'))
+
+
 class JSONFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload = {
@@ -57,6 +72,7 @@ def main() -> int:
                 write_launch_report(service.database, service.settings.bankroll)
                 last_launch_report = time.monotonic()
         except Exception:
+            stop_after_live_cycle_failure(service)
             logger.exception("weather cycle failed")
         stop.wait(service.recommended_poll_seconds())
     logger.info("weather service stopped cleanly")
