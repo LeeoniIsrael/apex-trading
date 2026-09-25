@@ -22,7 +22,7 @@ from src.kalshi.orderbook import parse_orderbook
 from src.monitoring.costs import CostTracker
 from src.research.collector import MarketCollector
 from src.research.accounting import paper_account
-from src.research.experiments import record_candidate
+from src.research.experiments import MODEL_VERSION, record_candidate
 from src.research.settlements import SettlementReconciler
 from src.risk.exposure import RiskPolicy, RiskState, risk_blocks
 from src.risk.sizing import SizingLimits, size_contracts
@@ -165,10 +165,17 @@ class WeatherService:
             if not spec.observation_window_start or not spec.observation_window_end:
                 continue
             if spec.observation_window_start <= observation.observed_at_utc < spec.observation_window_end:
-                extreme = observation.min_temperature_f if is_low else observation.max_temperature_f
-                for value in (observation.temperature_f, extreme):
-                    if value is not None:
-                        values.append(value)
+                if observation.temperature_f is not None:
+                    values.append(observation.temperature_f)
+                # A report timestamp does not establish when its 6h/24h extreme
+                # occurred. Preserve unbounded remarks for research, not trading.
+                if (observation.extreme_window_start is not None
+                    and observation.extreme_window_end is not None
+                    and spec.observation_window_start <= observation.extreme_window_start
+                    < observation.extreme_window_end <= spec.observation_window_end):
+                    extreme = observation.min_temperature_f if is_low else observation.max_temperature_f
+                    if extreme is not None:
+                        values.append(extreme)
         if not values:
             return None
         return min(values) if spec.measurement and spec.measurement.value == "low" else max(values)
@@ -364,7 +371,7 @@ class WeatherService:
                 connection.execute(
                     "INSERT INTO model_predictions(ticker,predicted_at,model_version,probability," 
                     "confidence_low,confidence_high,inputs_json,high_so_far_f) VALUES(?,?,?,?,?,?,?,?)",
-                    (spec.ticker, now.isoformat(), "remaining-day-v1", estimate.probability,
+                    (spec.ticker, now.isoformat(), MODEL_VERSION, estimate.probability,
                      estimate.confidence_low, estimate.confidence_high,
                      json.dumps({"members": len(remaining), "uncertainty_f": estimate.model_uncertainty_f}),
                      observed_extreme),

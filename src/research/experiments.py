@@ -15,6 +15,9 @@ from src.research.accounting import paper_account
 from src.storage.database import Database
 
 
+MODEL_VERSION = "source-uncertainty-v3"
+
+
 def allocation(event_key: str) -> tuple[str, bool]:
     number = int(hashlib.sha256(('apex-experiment-v2|' + event_key).encode()).hexdigest(), 16)
     return ('holdout' if number % 5 == 0 else 'development', (number // 5) % 10 == 1)
@@ -33,7 +36,7 @@ def record_candidate(db: Database, *, spec, now, side, edge, baseline, final, je
     lag = (observation_age <= 300 and probability_change is not None and book_change is not None
            and probability_change >= .05 and book_change < probability_change)
     data = dict(ticker=spec.ticker, event_key=event, captured_at=now.isoformat(), split=split,
-                model_version='two-sided-budget-v2', side=side, price_cents=price,
+                model_version=MODEL_VERSION, side=side, price_cents=price,
                 contracts=edge.fillable_contracts, fee_usd=edge.fee_usd,
                 probability=edge.model_probability, net_ev_usd=edge.net_ev_usd,
                 baseline_action=baseline, final_action='CONTROL' if control and final.startswith('BUY') else final,
@@ -57,8 +60,8 @@ def report(db: Database, bankroll: float = 100) -> dict:
     account = paper_account(db, bankroll)
     with db.connect() as c:
         rows = c.execute("SELECT r.*,s.yes_outcome FROM research_candidates r JOIN settlements s "
-                         "ON s.ticker=r.ticker AND s.final=1 WHERE r.model_version='two-sided-budget-v2' "
-                         "AND r.baseline_action LIKE 'BUY%' ORDER BY r.id").fetchall()
+                         "ON s.ticker=r.ticker AND s.final=1 WHERE r.model_version=? "
+                         "AND r.baseline_action LIKE 'BUY%' ORDER BY r.id", (MODEL_VERSION,)).fetchall()
     groups = defaultdict(lambda: {'markets':0, 'hypothetical_pnl':0., 'actual_pnl':0.,
                                   'winners_vetoed':0, 'losers_vetoed':0, 'jev_pnl_difference':0.})
     seen=set()

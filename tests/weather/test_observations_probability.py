@@ -59,12 +59,12 @@ def test_specials_do_not_define_routine_cadence():
     assert cadence.special_observation_count == 1
 
 
-def test_already_crossed_high_is_logically_impossible():
+def test_preliminary_high_crossing_is_not_certainty():
     result = simulate_contract_probability(
         spec=_spec(), high_so_far_f=97, ensemble_remaining_highs_f=[94, 95], seed=4,
     )
-    assert result.probability == 0
-    assert result.impossible
+    assert 0 < result.probability < 1
+    assert not result.impossible
 
 
 def test_monte_carlo_is_seeded_normalized_and_not_raw_certainty():
@@ -81,7 +81,7 @@ def test_monte_carlo_is_seeded_normalized_and_not_raw_certainty():
     assert 0 <= a.confidence_low <= a.confidence_high <= 1
 
 
-def test_already_crossed_daily_low_is_impossible():
+def test_preliminary_low_crossing_is_not_certainty():
     low_spec = parse_settlement_spec({
         "ticker": "KXLOWTAUS-26SEP23-B70",
         "event_ticker": "KXLOWTAUS-26SEP23",
@@ -92,5 +92,34 @@ def test_already_crossed_daily_low_is_impossible():
     result = simulate_contract_probability(
         spec=low_spec, high_so_far_f=69, ensemble_remaining_highs_f=[71, 72], seed=2,
     )
-    assert result.impossible
-    assert result.probability == 0
+    assert not result.impossible
+    assert 0 < result.probability < 1
+
+
+def test_integer_settlement_rounding_and_invalid_inputs():
+    result = simulate_contract_probability(spec=_spec(), high_so_far_f=None,
+        ensemble_remaining_highs_f=[95.6], forecast_error_std_f=0,
+        observation_error_std_f=0, simulations=100)
+    assert result.probability == .05  # publishes 96, so NOT below 96
+    for bad in (float('nan'), float('inf')):
+        with pytest.raises(ValueError):
+            simulate_contract_probability(spec=_spec(), high_so_far_f=bad,
+                ensemble_remaining_highs_f=[94])
+
+
+def test_unbounded_or_cross_day_extrema_cannot_contaminate_market():
+    from dataclasses import replace
+    from datetime import timedelta
+    from src.weather_service import WeatherService
+    spec = _spec()
+    when = spec.observation_window_start + timedelta(hours=1)
+    raw = RawObservation('KAUS', 'aviationweather', ReportType.METAR,
+        when, when, 'KAUS 231853Z 35/20 RMK T03500200 10372')
+    obs = parse_metar(raw, 'America/Chicago')
+    assert WeatherService._extreme_so_far(spec, [obs]) == 95
+    overlapping = replace(obs, extreme_window_start=when-timedelta(hours=6),
+        extreme_window_end=when)
+    assert WeatherService._extreme_so_far(spec, [overlapping]) == 95
+    contained = replace(obs, extreme_window_start=spec.observation_window_start,
+        extreme_window_end=when)
+    assert WeatherService._extreme_so_far(spec, [contained]) == pytest.approx(98.96)

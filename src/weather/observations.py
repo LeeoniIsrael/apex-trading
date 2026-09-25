@@ -52,6 +52,9 @@ class NormalizedObservation:
     max_temperature_f: float | None
     min_temperature_f: float | None
     status: ObservationStatus
+    # Only an explicitly established interval can contribute aggregate extrema.
+    extreme_window_start: datetime | None = None
+    extreme_window_end: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

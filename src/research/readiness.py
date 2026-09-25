@@ -65,15 +65,16 @@ def evaluate_readiness(evidence: ReadinessEvidence, policy: ReadinessPolicy) -> 
 def database_readiness(database, bankroll=100.0):
     from datetime import datetime, timezone
     from src.research.accounting import paper_account
+    from src.research.experiments import MODEL_VERSION
     account = paper_account(database, bankroll)
     with database.connect() as c:
         # Count useful forecasts with executable books, not discovery-only snapshots.
         snapshots = c.execute("SELECT COUNT(*) FROM (SELECT DISTINCT ticker,price_cents,probability,"
                               "CAST(strftime('%s',captured_at)-observation_age AS INTEGER) AS observation_time "
-                              "FROM research_candidates)").fetchone()[0]
+                              "FROM research_candidates WHERE model_version=?)", (MODEL_VERSION,)).fetchone()[0]
         rows = c.execute("SELECT r.*,s.yes_outcome FROM research_candidates r JOIN settlements s "
-                         "ON s.ticker=r.ticker AND s.final=1 WHERE r.split='holdout' AND r.model_version='two-sided-budget-v2' AND r.id IN "
-                         "(SELECT MIN(id) FROM research_candidates WHERE model_version='two-sided-budget-v2' AND baseline_action LIKE 'BUY%' GROUP BY event_key)").fetchall()
+                         "ON s.ticker=r.ticker AND s.final=1 WHERE r.split='holdout' AND r.model_version=? AND r.id IN "
+                         "(SELECT MIN(id) FROM research_candidates WHERE model_version=? AND baseline_action LIKE 'BUY%' GROUP BY event_key)", (MODEL_VERSION, MODEL_VERSION)).fetchall()
         issues = c.execute("SELECT COUNT(*) FROM health_events WHERE severity IN ('error','critical') "
                            "OR code IN ('settlement_parser_failure','settlement_reconcile_failed','fetch_failed','unknown_fee_schedule','invalid_fee_multiplier')").fetchone()[0]
         checks = {r['name']: bool(r['passed']) and 0 <= (datetime.now(timezone.utc)-datetime.fromisoformat(r['checked_at'])).total_seconds() < 86400
