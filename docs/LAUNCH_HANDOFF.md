@@ -194,3 +194,37 @@ inactive configuration, hard limits and operator-only activation conditions.
 
 Production read-only preflight: cash $0.2485, zero nonzero positions, zero resting
 orders; current NY series/event fee feed parsed as quadratic with multiplier 1.
+
+## Experimental preparation deployed — 2026-09-25 20:38 UTC
+
+Runtime source through `78ae3d4` deployed in PAPER mode with
+`LIVE_VALIDATION_PROFILE=experimental_100`. Both systemd services active/running,
+zero restarts and exit status 0 at the post-deploy check. Backup:
+`/var/backups/apex-weather/20260925T203838Z-experimental-prep`.
+Tracked-source SHA256 (path, NUL, contents) matched installed files:
+`199e1eaf651c6bf417cc8a038a4a128ea6b6ce68cd158697edfba4204e2acf12`.
+
+Prepared a separate persistent live DB as the service user at
+`/var/lib/apex-weather/apex_live.sqlite3`, mode 0600, zero orders, controls clear,
+no initial-cash baseline recorded. The previous default relative live DB did not
+exist. Set the absolute live DB and marker paths in the private server environment.
+The marker `/var/lib/apex-weather/LIVE_ENABLED` remains ABSENT.
+
+Recorded the prelaunch technical checks with explicit scope and provenance in
+verification_checks. Evidence includes actual demo orders, duplicate rejection,
+restart recovery, CLI stop, Telegram fill/stop acknowledgements 47/48, synthetic
+full-cycle/daemon tests, and current read-only production auth/fee checks. This is
+NOT production trading experience. Artifact:
+`/var/lib/apex-weather/verification/20260925-prelaunch-demo-evidence.json`.
+
+The experimental report returned operational_ready=true, no technical blockers,
+and validated_strategy_ready=false. Waived research requirements were independent
+evaluation, resolved sample count, calibration, positive independent EV, and
+historical PAPER drawdown. All original research data is retained. A real account
+cash/risk check still occurs on startup and every order. Checks expire after 24h.
+The strategy is unproven; no profit commitment is made.
+
+No real-money orders, live marker creation, or live-mode activation were performed.
+Next external prerequisite: operator funds the real account (last verified cash
+$0.2485; $99.75 would bring it just below the strict $100 ceiling), then personally
+performs separate activation. A deposit alone never starts the bot.

@@ -35,3 +35,30 @@ report, funding the account nor writing the example configuration activates it.
 
 The agent has not run enable-live, changed production to live, or sent a real
 order. The operator must perform any actual real-money activation themselves.
+
+## Operator-only activation after funding
+
+These commands are supplied for the account owner; the agent has NOT run them.
+They require a root shell on the existing server. Do not run until the account's
+available balance is at least $20 and no more than $100, the launch report is
+ready for the experimental profile, and you accept the unproven strategy.
+The software is currently installed but remains in paper mode.
+
+```bash
+set -e
+set -a
+. /etc/apex-weather/apex-weather.env
+set +a
+cd /opt/apex-weather/app
+/opt/apex-weather/venv/bin/python -m src.weather_cli launch-report
+/opt/apex-weather/venv/bin/python -m src.weather_cli balance-test
+/opt/apex-weather/venv/bin/python -m src.weather_cli enable-live --confirm I_ACCEPT_LIVE_RISK --accept-unvalidated-strategy
+/opt/apex-weather/venv/bin/python -c "from dotenv import set_key; set_key('/etc/apex-weather/apex-weather.env', 'TRADING_MODE', 'live')"
+systemctl restart apex-weather apex-weather-telegram
+systemctl is-active apex-weather apex-weather-telegram
+```
+
+Telegram `/status` must then explicitly say real money. `/pause` stops new
+orders; `/emergency_stop` also removes the enablement marker. Existing positions
+remain at risk after stopping. If either service fails or the account cannot be
+reconciled, stop and investigate rather than retrying orders or resetting history.
