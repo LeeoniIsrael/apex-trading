@@ -143,3 +143,14 @@ Unit tests of recovery do not certify production readiness. Live monitoring,
 production end-to-end checks, fee-override validation, and prospective strategy
 evidence still must clear the launch gate. The previous manual-reconciliation
 paragraph is superseded only for the supported audited recovery cases above.
+
+`apex-weather launch-report` writes a small `launch-readiness.json` next to the
+paper database. The daemon refreshes it every ten minutes without an LLM. It
+reports the current model cohort, real independent-event count, blockers and
+worker freshness. Funding cannot change the report or activate live mode.
+
+Real-mode Telegram now reads the separate audited cash/position snapshot, clearly
+labels real money, retains durable fill/result alerts, and refuses chat-based
+resume or order placement. A real-mode emergency stop removes the marker.
+Recovery, real-mode monitoring and fee-schedule validation each require explicit
+production verification records; unit-test success alone never creates them.

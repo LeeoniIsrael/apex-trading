@@ -255,6 +255,18 @@ def main() -> int:
                  if os.getenv("TELEGRAM_CONVERSATION_ENABLED", "false").lower() == "true"
                  and os.getenv("OPENAI_API_KEY") else None)
     alerts = AlertQueue(database)
+    live_mode = os.getenv("TRADING_MODE", "paper") == "live"
+    if live_mode:
+        from pathlib import Path
+        from src.monitoring.live_telegram import LiveAlertQueue, LiveTelegramController
+        live_database = Database(os.getenv("LIVE_DATABASE_PATH", "data/apex_live.sqlite3"))
+        if live_database.path.resolve() == database.path.resolve():
+            raise RuntimeError("paper and live monitoring databases must differ")
+        live_database.migrate()
+        controller = LiveTelegramController(live_database, database,
+            Path(os.getenv("LIVE_ENABLEMENT_PATH", "data/LIVE_ENABLED")))
+        assistant = controller
+        alerts = LiveAlertQueue(live_database, database)
 
     async def reply(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.effective_chat or str(update.effective_chat.id) != allowed_chat:
@@ -271,7 +283,7 @@ def main() -> int:
         try:
             answer = await asyncio.to_thread(assistant.answer, update.message.text or "")
         except Exception:
-            answer = "• This is paper trading.\n• I don't know right now. Try /status."
+            answer = ("• This is real-money trading." if live_mode else "• This is paper trading.")+"\n• I don't know right now. Try /status."
         await update.message.reply_text(answer)
 
     async def send_daily(context: ContextTypes.DEFAULT_TYPE) -> None:

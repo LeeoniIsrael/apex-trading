@@ -237,6 +237,14 @@ class WeatherService:
                             )
 
     def run_once(self) -> dict[str, int]:
+        if self.live is not None:
+            try:
+                self.live.reconcile()
+            except Exception:
+                with self.live.database.transaction() as c:
+                    c.execute("INSERT INTO health_events(occurred_at,severity,component,code,message,details_json) VALUES(?,?,?,?,?,?)",
+                        (datetime.now(timezone.utc).isoformat(),'critical','live','portfolio_reconciliation_failed','New orders blocked; account reconciliation required','{}'))
+                raise RuntimeError('live account reconciliation blocked') from None
         if self.settings.monthly_vps_cost_usd:
             month=datetime.now(timezone.utc).strftime('%Y-%m')
             self.cost_tracker.record('infrastructure',self.settings.monthly_vps_cost_usd,

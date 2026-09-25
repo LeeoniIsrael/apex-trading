@@ -23,6 +23,9 @@ class ReadinessEvidence:
     emergency_stop_verified: bool = False
     telegram_alerts_verified: bool = False
     equity_reporting_verified: bool = False
+    live_recovery_verified: bool = False
+    live_monitoring_verified: bool = False
+    fee_schedule_verified: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +41,8 @@ def evaluate_readiness(evidence: ReadinessEvidence, policy: ReadinessPolicy) -> 
     if not all(math.isfinite(v) for v in (evidence.net_ev_usd, evidence.realized_paper_pnl_usd, evidence.max_drawdown_pct)):
         failures.append("nonfinite_evidence")
     for name in ("independent_evaluation", "accounting_verified", "authenticated_balance_verified",
-                 "idempotency_verified", "emergency_stop_verified", "telegram_alerts_verified", "equity_reporting_verified"):
+                 "idempotency_verified", "emergency_stop_verified", "telegram_alerts_verified", "equity_reporting_verified", "live_recovery_verified",
+                 "live_monitoring_verified", "fee_schedule_verified"):
         if not getattr(evidence, name):
             failures.append(name)
 
@@ -95,6 +99,9 @@ def database_readiness(database, bankroll=100.0):
         idempotency_verified=checks.get('idempotency',False),
         emergency_stop_verified=checks.get('emergency_stop',False),
         telegram_alerts_verified=checks.get('telegram_alerts',False),
-        equity_reporting_verified=checks.get('equity_reporting',False))
+        equity_reporting_verified=checks.get('equity_reporting',False),
+        live_recovery_verified=checks.get('live_recovery',False),
+        live_monitoring_verified=checks.get('live_monitoring',False),
+        fee_schedule_verified=checks.get('fee_schedule',False))
     ready, failures = evaluate_readiness(evidence, ReadinessPolicy())
     return ready, failures, evidence

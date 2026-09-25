@@ -7,6 +7,7 @@ import logging
 import signal
 import threading
 from datetime import datetime, timezone
+import time
 
 from src.weather_config import WeatherSettings
 from src.weather_service import WeatherService
@@ -40,6 +41,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
     service = WeatherService(WeatherSettings())
+    last_launch_report = 0.0
     while not stop.is_set():
         try:
             result = service.run_once()
@@ -50,6 +52,10 @@ def main() -> int:
                     "metric_value,dimensions_json) VALUES(?,NULL,'service_heartbeat',1,?)",
                     (datetime.now(timezone.utc).isoformat(), json.dumps(result, sort_keys=True)),
                 )
+            if time.monotonic()-last_launch_report >= 600:
+                from src.research.launch_report import write_launch_report
+                write_launch_report(service.database, service.settings.bankroll)
+                last_launch_report = time.monotonic()
         except Exception:
             logger.exception("weather cycle failed")
         stop.wait(service.recommended_poll_seconds())

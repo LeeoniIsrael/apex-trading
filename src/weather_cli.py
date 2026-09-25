@@ -29,6 +29,7 @@ def main() -> int:
     sub.add_parser("discover")
     sub.add_parser("health")
     sub.add_parser("readiness")
+    sub.add_parser("launch-report")
     sub.add_parser("research")
     sub.add_parser("accounting")
     sub.add_parser("balance-test")
@@ -42,6 +43,11 @@ def main() -> int:
     database = Database(settings.database_path)
     database.migrate()
 
+    if args.command == "launch-report":
+        from src.research.launch_report import write_launch_report
+        report = write_launch_report(database, settings.bankroll)
+        print(json.dumps(report))
+        return 0 if report['ready'] else 2
     if args.command == "emergency-stop":
         from datetime import datetime, timezone
         for db in (database, Database(settings.live_database_path)):
@@ -63,7 +69,7 @@ def main() -> int:
         balance = authenticated_balance(client)
         passed = balance >= settings.live_balance_floor_usd
         with database.transaction() as c:
-            c.execute('INSERT OR REPLACE INTO verification_checks VALUES(?,?,?,?)', ('authenticated_balance',int(passed),datetime.now(timezone.utc).isoformat(),'Read-only authenticated balance response validated'))
+            c.execute('INSERT OR REPLACE INTO verification_checks VALUES(?,?,?,?)', ('authenticated_balance',1,datetime.now(timezone.utc).isoformat(),'Read-only authentication validated; funding floor is checked separately before activation'))
         print(json.dumps({'authenticated':True, 'safety_floor_passed':passed}))
         return 0 if passed else 2
     if args.command in {"research", "accounting"}:
