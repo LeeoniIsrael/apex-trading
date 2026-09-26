@@ -34,3 +34,12 @@ def test_real_alerts_are_durable_and_include_exact_fees(tmp_path):
     assert len(pending)==1 and 'Real-money trade' in pending[0][1] and '$0.83' in pending[0][1]
     queue.delivered(pending[0][0])
     assert LiveAlertQueue(db,paper).pending()==[]
+
+
+def test_real_status_calls_negative_settled_pnl_a_loss(tmp_path):
+    db=Database(tmp_path/'live');db.migrate()
+    paper=Database(tmp_path/'paper');paper.migrate()
+    marker=tmp_path/'marker';marker.write_text('enabled')
+    with db.transaction() as c:
+        c.execute('INSERT INTO control_state VALUES(?,?,?)',('live_audit',json.dumps({'cash':'95.3202','open_cost':'0','realized_pnl':'-2.6883','positions':{}}),datetime.now(timezone.utc).isoformat()))
+    assert 'loss $2.69' in LiveTelegramController(db,paper,marker).handle('/status')

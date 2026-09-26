@@ -32,9 +32,11 @@ class LiveTelegramController:
         fresh = 0 <= (datetime.now(timezone.utc)-datetime.fromisoformat(row['updated_at'])).total_seconds() <= 120
         blocked = (not fresh or not self.marker_path.exists()
                    or controls.get('paused')!='false' or controls.get('emergency_stop')!='false')
+        pnl = Decimal(data['realized_pnl'])
+        pnl_text = f'profit ${pnl:.2f}' if pnl >= 0 else f'loss ${-pnl:.2f}'
         return (f"• Real money. {'New trades stopped or account check needed' if blocked else 'Account checked; every bet still needs all safety checks'}.\n"
                 f"• {'Last verified' if not fresh else 'Verified'} cash: ${Decimal(data['cash']):.2f}. Open bet cost including fees: ${Decimal(data['open_cost']):.2f}.\n"
-                f"• Finished bets made ${Decimal(data['realized_pnl']):.2f} after trading fees; server and AI costs are separate.\n"
+                f"• Finished bets: {pnl_text} after trading fees; server and AI costs are separate.\n"
                 f"• Model: {MODEL_VERSION}. Trading: {'stopped' if blocked else 'eligible for checked orders'}.\n"
                 '• YES means the outcome happens. NO means it does not. Chat cannot place a bet.')
 
