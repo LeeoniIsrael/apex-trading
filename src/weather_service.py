@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
 from src.execution.paper_executor import PaperExecutor
-from src.execution.live_executor import LiveExecutor
+from src.execution.live_executor import LiveExecutor, LiveRiskLimitReached
 from src.execution.order_manager import cancel_stale_paper_orders
 from src.execution.position_manager import evaluate_exit
 from src.kalshi.auth import KalshiSigner
@@ -591,10 +591,15 @@ class WeatherService:
                 break
             client_order_id = str(uuid.uuid4())
             if self.live is not None:
-                self.live.submit_buy(
-                    ticker=spec.ticker, side=side, price_cents=best_ask,
-                    contracts=contracts, client_order_id=client_order_id,
-                )
+                try:
+                    self.live.submit_buy(
+                        ticker=spec.ticker, side=side, price_cents=best_ask,
+                        contracts=contracts, client_order_id=client_order_id,
+                    )
+                except LiveRiskLimitReached:
+                    # A tighter executor limit can reject an otherwise valid
+                    # research signal. No order was reserved or sent.
+                    continue
                 total_exposure += exposure
                 daily_pnl -= exposure  # Conservative reservation until the next audit.
                 city = spec.city or "unknown"

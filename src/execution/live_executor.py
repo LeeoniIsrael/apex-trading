@@ -27,6 +27,10 @@ def authenticated_balance(client) -> float:
     return value
 
 
+class LiveRiskLimitReached(RuntimeError):
+    """A proposed entry exceeds a normal portfolio limit before any POST."""
+
+
 def validate_intent_time(spec, candidate, now):
     """Recheck wall-clock expiry after potentially slow remote preflight calls."""
     captured = datetime.fromisoformat(candidate['captured_at'])
@@ -174,7 +178,7 @@ class LiveExecutor:
                 or (peak-balance+value)/peak > s.live_max_drawdown
                 or reserved+value > s.live_capital_limit_usd
                 or balance-value < s.live_balance_floor_usd):
-                raise RuntimeError('live risk limit')
+                raise LiveRiskLimitReached('live risk limit')
             c.execute('INSERT INTO orders VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
                       (client_id,client_id,ticker,side,action,price_cents,contracts,0,'submitting',0,now.isoformat(),now.isoformat()))
         try:

@@ -137,3 +137,18 @@ def test_almost_used_daily_budget_skips_without_failing_cycle(tmp_path,monkeypat
     result=service.run_once()
     assert result['predictions']==1 and result['live_orders']==0
     assert not client.calls
+
+
+def test_executor_risk_rejection_skips_without_pausing_or_posting(tmp_path,monkeypatch):
+    from src.execution.live_executor import LiveRiskLimitReached
+    service,client,paper,live=cycle(tmp_path,monkeypatch)
+    def reject(**kwargs):
+        raise LiveRiskLimitReached('live risk limit')
+    service.live.submit_buy=reject
+    result=service.run_once()
+    assert result['predictions']==1 and result['live_orders']==0
+    assert not client.calls
+    with live.connect() as c:
+        assert c.execute("SELECT value FROM control_state WHERE key='paused'").fetchone()[0]=='false'
+        assert c.execute('SELECT COUNT(*) FROM orders').fetchone()[0]==0
+        assert c.execute("SELECT COUNT(*) FROM health_events WHERE code='cycle_failed'").fetchone()[0]==0
