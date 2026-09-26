@@ -133,6 +133,9 @@ class LiveExecutor:
             validate_intent_time(spec, candidate, datetime.now(timezone.utc))
             if (not spec.tradeable
                 or candidate['model_version'] != MODEL_VERSION
+                or candidate['source'] != spec.official_source.value
+                or candidate['market_type'] != spec.measurement.value
+                or candidate['station'] != spec.station_id
                 or candidate['final_action'] != 'BUY_'+side.upper() or candidate['net_ev_usd'] <= 0
                 or price_cents > candidate['price_cents'] or contracts > candidate['contracts']):
                 raise RuntimeError('stale, ambiguous, or nonqualifying deterministic intent')

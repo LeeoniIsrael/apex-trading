@@ -23,6 +23,7 @@ from src.monitoring.costs import CostTracker
 from src.research.collector import MarketCollector
 from src.research.accounting import paper_account
 from src.research.experiments import MODEL_VERSION, record_candidate
+from src.research.forecast_error import error_summary
 from src.research.settlements import SettlementReconciler
 from src.risk.exposure import RiskPolicy, RiskState, risk_blocks
 from src.risk.sizing import SizingLimits, size_contracts
@@ -33,7 +34,7 @@ from src.strategy.opportunities import ranked_opportunities
 from src.strategy.jev import JevClient, JevReview
 from src.strategy.monte_carlo import simulate_contract_probability
 from src.strategy.runtime_review import RuntimeExceptionReviewer
-from src.strategy.settlement import OfficialSource, SettlementSpec, parse_settlement_spec
+from src.strategy.settlement import OfficialSource, SettlementSpec, parse_settlement_spec, value_in_contract
 from src.weather.forecasts import ForecastRun
 from src.weather.metar import MetarProvider
 from src.weather.nws import NWSProvider
@@ -101,6 +102,7 @@ class WeatherService:
         self._jev_cache: dict[str, tuple[datetime, JevReview]] = {}
         self._cadence_minutes: set[int] = set()
         self._last_settlement_reconcile: datetime | None = None
+        self._error_metrics_cache: tuple[datetime, dict] | None = None
 
     def _record_health(self, severity: str, component: str, code: str, message: str) -> None:
         with self.database.transaction() as connection:
@@ -361,6 +363,9 @@ class WeatherService:
                 self._record_health("error", "accounting", "ledger_discrepancy", ",".join(account.discrepancies))
                 return {"markets": len(specs), "predictions": 0, "decisions": 0, "paper_orders": 0}
             risk_equity = account.equity
+        if self._error_metrics_cache is None or now-self._error_metrics_cache[0] >= timedelta(minutes=10):
+            self._error_metrics_cache = (now,error_summary(self.database, now))
+        error_metrics = self._error_metrics_cache[1]
         predictions = decisions = paper_orders = 0
 
         for spec in current_specs:
@@ -370,6 +375,11 @@ class WeatherService:
             if key not in station_cache:
                 continue
             observations, forecast, nws_forecast = station_cache[key]
+            if (spec.official_source == OfficialSource.WEATHER_COMPANY and
+                    (not observations or any(o.source != 'weather.com/kalshi'
+                                             or o.station_id != spec.station_id for o in observations))):
+                self._record_health('warning','model','settlement_source_mismatch',spec.ticker)
+                continue
             observed_extreme = self._extreme_so_far(spec, observations)
             ensemble_extremes = self._remaining_extremes(spec, forecast, now)
             nws_extremes = self._remaining_extremes(spec, nws_forecast, now)
@@ -386,6 +396,7 @@ class WeatherService:
                 spec=spec, high_so_far_f=observed_extreme,
                 ensemble_remaining_highs_f=remaining,
                 simulations=self.settings.monte_carlo_simulations,
+                forecast_error_std_f=error_metrics["forecast_error_std_f"],
             )
             predictions += 1
             with self.database.transaction() as connection:
@@ -394,7 +405,8 @@ class WeatherService:
                     "confidence_low,confidence_high,inputs_json,high_so_far_f) VALUES(?,?,?,?,?,?,?,?)",
                     (spec.ticker, now.isoformat(), MODEL_VERSION, estimate.probability,
                      estimate.confidence_low, estimate.confidence_high,
-                     json.dumps({"members": len(remaining), "uncertainty_f": estimate.model_uncertainty_f}),
+                     json.dumps({"members": len(remaining), "uncertainty_f": estimate.model_uncertainty_f,
+                                 "training_days": error_metrics["training_days"]}),
                      observed_extreme),
                 )
 
@@ -481,6 +493,16 @@ class WeatherService:
                     self._record_health(
                         "warning", "runtime_llm", "review_failed", type(exc).__name__,
                     )
+            # A large disagreement requires two current, independent forecast
+            # families to agree with the proposed side before real exposure.
+            market_gap = abs(side_probability - edge.market_implied_probability)
+            median_ensemble = statistics.median(ensemble_extremes) if ensemble_extremes else None
+            median_nws = statistics.median(nws_extremes) if nws_extremes else None
+            independent_support = (median_ensemble is not None and median_nws is not None
+                and abs(median_ensemble-median_nws) <= 2.0
+                and value_in_contract(round(median_ensemble),spec) == (side == 'yes')
+                and value_in_contract(round(median_nws),spec) == (side == 'yes'))
+            disagreement_block = market_gap > .30 and not independent_support
             decision = decide(
                 settlement=spec, edge=edge,
                 data_stale=(not 0 <= (now - max(item.observed_at_utc for item in observations)).total_seconds() <= 7200
@@ -492,7 +514,7 @@ class WeatherService:
                 min_net_edge=self.settings.min_net_edge,
                 max_spread_cents=self.settings.max_spread_cents,
                 min_liquidity_contracts=1,
-                risk_reason_codes=(),
+                risk_reason_codes=("extreme_market_disagreement",) if disagreement_block else (),
                 external_veto_codes=(),
             )
             deterministic_action = decision.action.value
@@ -562,7 +584,24 @@ class WeatherService:
                      decision.action.value, jev_latency_ms, jev_cost_usd,
                      edge.executable_price_cents, edge.net_ev_usd, edge.fill_probability,
                      json.dumps({"jev_bypassed_obvious": self.jev is not None
-                                 and edge.gross_edge >= self.settings.jev_obvious_edge})),
+                                 and edge.gross_edge >= self.settings.jev_obvious_edge,
+                                 "evidence": {"primary_rule": market_metadata.get("rules_primary"),
+                                   "official_source": spec.official_source.value,
+                                   "measurement": spec.measurement.value,
+                                   "station": spec.station_id,
+                                   "observation_window": [spec.observation_window_start.isoformat(),spec.observation_window_end.isoformat()],
+                                   "observations": [asdict(o) for o in observations],
+                                   "ensemble_remaining_extremes_f": ensemble_extremes,
+                                   "nws_remaining_extremes_f": nws_extremes,
+                                   "forecast_generated_at": [forecast.generated_at_utc.isoformat(),nws_forecast.generated_at_utc.isoformat()],
+                                   "observed_extreme_f": observed_extreme,
+                                   "model_probability_yes": estimate.probability,
+                                   "model_uncertainty_f": estimate.model_uncertainty_f,
+                                   "training_days": error_metrics["training_days"],
+                                   "side": side, "executable_price_cents": edge.executable_price_cents,
+                                   "contracts": contracts, "fee_usd": edge.fee_usd,
+                                   "market_gap": market_gap,
+                                   "independent_support": independent_support}},default=str)),
                 )
             latest_observation = max(item.observed_at_utc for item in observations)
             latest_temperature = next((item.temperature_f for item in sorted(observations, key=lambda x:x.observed_at_utc, reverse=True) if item.temperature_f is not None), None)

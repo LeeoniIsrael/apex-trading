@@ -33,7 +33,7 @@ def cycle(tmp_path,monkeypatch):
     service._spec_cache=(now,[spec])
     service._last_settlement_reconcile=now
     raw_obs=RawObservation('KAUS','fixture',ReportType.METAR,now,now,'KAUS 251853Z 27/20 RMK T02700200')
-    obs=parse_metar(raw_obs,'America/Chicago')
+    obs=replace(parse_metar(raw_obs,'America/Chicago'),source='weather.com/kalshi')
     forecast=ForecastRun('fixture','KAUS','fixture',now,now,((HourlyForecast(now+timedelta(hours=1),80),),))
     service._station_data=lambda *args:([obs],forecast,forecast)
     client.get_orderbook=lambda *a,**k:{'ticker':'TEST','orderbook_fp':{'yes_dollars':[['0.3900','100.00']],'no_dollars':[['0.6000','100.00']]}}
@@ -152,3 +152,45 @@ def test_executor_risk_rejection_skips_without_pausing_or_posting(tmp_path,monke
         assert c.execute("SELECT value FROM control_state WHERE key='paused'").fetchone()[0]=='false'
         assert c.execute('SELECT COUNT(*) FROM orders').fetchone()[0]==0
         assert c.execute("SELECT COUNT(*) FROM health_events WHERE code='cycle_failed'").fetchone()[0]==0
+
+
+def test_decision_evidence_contains_primary_rule_weather_price_and_fee(tmp_path,monkeypatch):
+    service,client,paper,live=cycle(tmp_path,monkeypatch)
+    service.run_once()
+    with paper.connect() as c:
+        d=json.loads(c.execute('SELECT details_json FROM decision_benchmarks ORDER BY id DESC LIMIT 1').fetchone()[0])['evidence']
+    assert 'Maximum temperature' in d['primary_rule']
+    assert d['official_source']=='weather_company'
+    assert d['observations'] and d['observations'][0]['source']=='weather.com/kalshi'
+    assert d['ensemble_remaining_extremes_f'] and d['nws_remaining_extremes_f']
+    assert d['executable_price_cents']>0 and d['fee_usd']>=0
+
+
+def test_wrong_settlement_source_never_generates_a_candidate(tmp_path,monkeypatch):
+    service,client,paper,live=cycle(tmp_path,monkeypatch)
+    old=service._station_data
+    def wrong(*args):
+        obs,a,b=old(*args)
+        return [replace(o,source='unrelated') for o in obs],a,b
+    service._station_data=wrong
+    result=service.run_once()
+    assert result['predictions']==0 and not client.calls
+
+
+def test_large_market_disagreement_without_independent_support_skips(tmp_path,monkeypatch):
+    from src.weather.forecasts import ForecastRun,HourlyForecast
+    service,client,paper,live=cycle(tmp_path,monkeypatch)
+    service.settings.max_forecast_disagreement_f=100
+    old=service._station_data
+    def diverged(*args):
+        obs,a,b=old(*args)
+        now=datetime.now(timezone.utc)
+        b=ForecastRun('fixture','KAUS','fixture',now,now,((HourlyForecast(now+timedelta(hours=1),100),),))
+        return obs,a,b
+    service._station_data=diverged
+    client.get_orderbook=lambda *a,**k:{'ticker':'TEST','orderbook_fp':{'yes_dollars':[['0.9500','100.00']],'no_dollars':[['0.9800','100.00']]}}
+    result=service.run_once()
+    assert result['predictions']==1 and not client.calls
+    with paper.connect() as c:
+        reasons=[json.loads(r[0]) for r in c.execute('SELECT reason_codes FROM decisions')]
+    assert any('extreme_market_disagreement' in r for r in reasons)

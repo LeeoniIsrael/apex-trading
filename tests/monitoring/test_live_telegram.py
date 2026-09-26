@@ -16,6 +16,7 @@ def test_real_status_is_grounded_read_only_and_emergency_latches(tmp_path):
         answer=controller.answer(text)
         assert 'Real money' in answer and '$99.17' in answer and '$0.83' in answer
         assert 2<=len(answer.splitlines())<=5
+        assert 'Model: source-uncertainty-v5' in answer and 'Trading: eligible for checked orders' in answer
     with db.connect() as c: assert c.execute('SELECT COUNT(*) FROM orders').fetchone()[0]==0
     assert 'stopped' in controller.handle('/emergency_stop')
     assert not marker.exists()

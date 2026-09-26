@@ -37,10 +37,10 @@ def setup(tmp_path, monkeypatch):
     market={'ticker':'TEST','event_ticker':'EVENT','series_ticker':'SERIES','rules_primary':f'Maximum temperature at CLIAUS for {now.strftime("%b %d, %Y")} is less than 96 according to The Weather Company.','_fee_type':'quadratic','_fee_multiplier':1}
     with paper.transaction() as c:
         c.execute('INSERT INTO markets(ticker,raw_json,observed_at) VALUES(?,?,?)',('TEST',json.dumps(market),now.isoformat()))
-        c.execute("INSERT INTO research_candidates(ticker,event_key,captured_at,split,model_version,side,price_cents,contracts,fee_usd,probability,net_ev_usd,baseline_action,final_action,source,station,city,market_type,price_bucket,time_bucket,seconds_to_close,observation_age,liquidity,lag_candidate,control) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",('TEST','event',now.isoformat(),'holdout',MODEL_VERSION,'yes',40,2,.04,.9,.96,'BUY_YES','BUY_YES','twc','KAUS','Austin','high','>10c','early',3600,60,2,0,0))
+        c.execute("INSERT INTO research_candidates(ticker,event_key,captured_at,split,model_version,side,price_cents,contracts,fee_usd,probability,net_ev_usd,baseline_action,final_action,source,station,city,market_type,price_bucket,time_bucket,seconds_to_close,observation_age,liquidity,lag_candidate,control) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",('TEST','event',now.isoformat(),'holdout',MODEL_VERSION,'yes',40,2,.04,.9,.96,'BUY_YES','BUY_YES','weather_company','KAUS','Austin','high','>10c','early',3600,60,2,0,0))
     # Keep date boundaries independent of the time this test runs.
     from datetime import timedelta
-    monkeypatch.setattr('src.execution.live_executor.parse_settlement_spec', lambda raw:SimpleNamespace(tradeable=True,observation_window_end=now+timedelta(hours=2),last_trading_time=now+timedelta(hours=2),city='Austin'))
+    monkeypatch.setattr('src.execution.live_executor.parse_settlement_spec', lambda raw:SimpleNamespace(tradeable=True,observation_window_end=now+timedelta(hours=2),last_trading_time=now+timedelta(hours=2),city='Austin',official_source=SimpleNamespace(value='weather_company'),measurement=SimpleNamespace(value='high'),station_id='KAUS'))
     client=FakeClient()
     return LiveExecutor(settings,client,live),client,paper,live,settings
 
@@ -148,7 +148,7 @@ def test_slow_preflight_cannot_submit_expired_intent(tmp_path, monkeypatch, expi
             return datetime.fromisoformat(value)
 
     monkeypatch.setattr('src.execution.live_executor.datetime', Clock)
-    spec = SimpleNamespace(tradeable=True, city='Austin',
+    spec = SimpleNamespace(tradeable=True, city='Austin',official_source=SimpleNamespace(value='weather_company'),measurement=SimpleNamespace(value='high'),station_id='KAUS',
         observation_window_end=start+timedelta(hours=2),
         last_trading_time=start+timedelta(hours=2))
     monkeypatch.setattr('src.execution.live_executor.parse_settlement_spec', lambda raw: spec)
@@ -200,4 +200,13 @@ def test_new_order_cannot_cross_projected_cash_limit(tmp_path,monkeypatch,limit)
     with live.transaction() as c:
         c.execute('INSERT INTO control_state VALUES(?,?,?)',(key,value,datetime.now(timezone.utc).isoformat()))
     with pytest.raises(LiveRiskLimitReached,match='live risk limit'): submit(ex)
+    assert not client.calls
+
+
+@pytest.mark.parametrize('field',['source','station','market_type'])
+def test_live_order_rejects_candidate_source_or_extreme_mismatch(tmp_path,monkeypatch,field):
+    ex,client,paper,live,s=setup(tmp_path,monkeypatch)
+    with paper.transaction() as c:
+        c.execute(f'UPDATE research_candidates SET {field}=?',('wrong',))
+    with pytest.raises(RuntimeError,match='nonqualifying'): submit(ex)
     assert not client.calls
