@@ -15,7 +15,7 @@ from src.research.accounting import paper_account
 from src.storage.database import Database
 
 
-MODEL_VERSION = "source-uncertainty-v3"
+MODEL_VERSION = "source-uncertainty-v4"
 
 
 def allocation(event_key: str) -> tuple[str, bool]:

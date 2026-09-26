@@ -96,6 +96,25 @@ def test_preliminary_low_crossing_is_not_certainty():
     assert 0 < result.probability < 1
 
 
+def test_lax_low_market_replay_uses_observed_minimum_not_afternoon_high():
+    # Saved 2026-09-25 evidence: KLAX reached 68F before the NO fill, while
+    # the afternoon high was 77F. Generic secondary rules mention both extrema.
+    spec = parse_settlement_spec({
+        "ticker": "KXLOWTLAX-26SEP25-B68.5",
+        "event_ticker": "KXLOWTLAX-26SEP25",
+        "title": "Will the minimum temperature be 68-69° on Sep 25, 2026?",
+        "rules_primary": ("If the minimum temperature recorded at Los Angeles (CLILAX) "
+                          "for Sep 25, 2026, is between 68-69° fahrenheit according "
+                          "to The Weather Company, then the market resolves to Yes."),
+        "rules_secondary": ("The official and final value is the maximum/minimum "
+                            "temperature as reported by the Weather Company."),
+    })
+    corrected = simulate_contract_probability(
+        spec=spec, high_so_far_f=68, ensemble_remaining_highs_f=[70, 72], seed=0,
+    )
+    assert corrected.probability > 0.5
+
+
 def test_integer_settlement_rounding_and_invalid_inputs():
     result = simulate_contract_probability(spec=_spec(), high_so_far_f=None,
         ensemble_remaining_highs_f=[95.6], forecast_error_std_f=0,

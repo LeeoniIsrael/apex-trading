@@ -47,7 +47,8 @@ class LiveExecutor:
             raise RuntimeError('live and paper databases must be separate')
         self.settings, self.client, self.database = settings, client, database
         self.paper_database = Database(settings.database_path)
-        self._gate()
+        # A paused worker must still start for read-only reconciliation and
+        # monitoring. Every order performs the full gate immediately before POST.
         self.reconcile()
 
     def _gate(self):

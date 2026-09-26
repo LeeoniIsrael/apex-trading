@@ -4,6 +4,7 @@ import pytest
 
 from src.strategy.settlement import (
     MarketType,
+    Measurement,
     OfficialSource,
     parse_settlement_spec,
     value_in_contract,
@@ -146,3 +147,38 @@ def test_conflicting_station_date_and_unknown_inclusivity_are_blocked():
 def test_between_range_semantics():
     spec=parse_settlement_spec(_market(rules_primary='Maximum temperature at CLIAUS for Sep 23, 2026 is between 78 and 79 degrees according to The Weather Company.'))
     assert spec.tradeable and spec.threshold_low==78 and spec.threshold_high==79
+
+
+@pytest.mark.parametrize("city,cli,station,range_low,range_high,utc_start", [
+    ("Denver", "CLIDEN", "KDEN", 51, 52, 6),
+    ("Los Angeles", "CLILAX", "KLAX", 68, 69, 7),
+    ("Chicago", "CLIMDW", "KMDW", 58, 59, 5),
+])
+def test_actual_low_market_boilerplate_does_not_turn_minimum_into_maximum(
+    city, cli, station, range_low, range_high, utc_start,
+):
+    market = _market(
+        ticker=f"KXLOWT{station}-26SEP25-B{range_low}.5",
+        event_ticker=f"KXLOWT{station}-26SEP25",
+        title=f"Will the minimum temperature be {range_low}-{range_high}° on Sep 25, 2026?",
+        rules_primary=(f"If the minimum temperature recorded at {city} ({cli}) for Sep 25, 2026, "
+                       f"is between {range_low}-{range_high}° fahrenheit according to The Weather Company, "
+                       "then the market resolves to Yes."),
+        rules_secondary=("The official and final value is the maximum/minimum temperature "
+                         "as reported by the Weather Company."),
+    )
+    spec = parse_settlement_spec(market)
+    assert spec.tradeable
+    assert spec.measurement == Measurement.LOW
+    assert spec.station_id == station
+    assert spec.observation_window_start == datetime(2026, 9, 25, utc_start, tzinfo=timezone.utc)
+    assert value_in_contract(range_low, spec)
+    assert not value_in_contract(range_high + 1, spec)
+
+
+def test_conflicting_extremes_in_primary_rule_are_blocked():
+    spec = parse_settlement_spec(_market(rules_primary=(
+        "Maximum or minimum temperature at CLIAUS for Sep 23, 2026 "
+        "is between 78 and 79 according to The Weather Company.")))
+    assert "conflicting_measurements" in spec.ambiguity_flags
+    assert not spec.tradeable

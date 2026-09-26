@@ -128,7 +128,9 @@ def _thresholds(text: str, market: dict[str, Any]) -> tuple[float | None, float 
         if boundary == "low":
             return value, None, inclusive, False
         return None, value, False, inclusive
-    match = re.search(r"(?:between\s+)?(-?\d+(?:\.\d+)?)\s*(?:to|through|and)\s*(-?\d+(?:\.\d+)?)", lowered)
+    match = re.search(r"\bbetween\s+(-?\d+(?:\.\d+)?)\s*(?:-|to|through|and)\s*(-?\d+(?:\.\d+)?)", lowered)
+    if not match:
+        match = re.search(r"(-?\d+(?:\.\d+)?)\s*(?:to|through|and)\s*(-?\d+(?:\.\d+)?)", lowered)
     if match:
         return float(match.group(1)), float(match.group(2)), True, True
     # Strikes without explicit textual inclusivity are ambiguous.
@@ -146,6 +148,7 @@ def _fixed_standard_window(
 
 def parse_settlement_spec(market: dict[str, Any]) -> SettlementSpec:
     """Parse a spec from one market payload; uncertainty becomes a hard flag."""
+    primary = str(market.get("rules_primary") or "")
     rules = "\n".join(str(market.get(k) or "") for k in (
         "rules_primary", "rules_secondary", "title", "subtitle", "yes_sub_title",
     )).strip()
@@ -167,9 +170,17 @@ def parse_settlement_spec(market: dict[str, Any]) -> SettlementSpec:
     market_type = MarketType.HOURLY if hourly else MarketType.DAILY
     if hourly:
         flags.append("hourly_execution_not_supported")
-    if re.search(r"\b(highest|maximum|max temperature)\b", lowered):
+    # Secondary boilerplate often says "maximum/minimum" regardless of the
+    # contract. The primary rule alone defines which daily extreme settles it.
+    primary_lower = primary.lower()
+    has_high = bool(re.search(r"\b(highest|maximum|max temperature)\b", primary_lower))
+    has_low = bool(re.search(r"\b(lowest|minimum|min temperature)\b", primary_lower))
+    if has_high and has_low:
+        measurement = None
+        flags.append("conflicting_measurements")
+    elif has_high:
         measurement = Measurement.HIGH
-    elif re.search(r"\b(lowest|minimum|min temperature)\b", lowered):
+    elif has_low:
         measurement = Measurement.LOW
     elif hourly:
         measurement = Measurement.TEMPERATURE
@@ -194,7 +205,7 @@ def parse_settlement_spec(market: dict[str, Any]) -> SettlementSpec:
     market_day = _market_date(market, rules)
     if market_day is None:
         flags.append("market_date_missing")
-    low, high, inclusive_low, inclusive_high = _thresholds(rules, market)
+    low, high, inclusive_low, inclusive_high = _thresholds(primary, market)
     if (any(v is not None and not math.isfinite(v) for v in (low, high))
         or (low is not None and high is not None and low > high)):
         flags.append("invalid_threshold")

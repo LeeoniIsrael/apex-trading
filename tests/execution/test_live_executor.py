@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.execution.live_executor import LiveExecutor, authenticated_balance
+from src.research.experiments import MODEL_VERSION
 from src.storage.database import Database
 from src.weather_config import WeatherSettings
 
@@ -36,7 +37,7 @@ def setup(tmp_path, monkeypatch):
     market={'ticker':'TEST','event_ticker':'EVENT','series_ticker':'SERIES','rules_primary':f'Maximum temperature at CLIAUS for {now.strftime("%b %d, %Y")} is less than 96 according to The Weather Company.','_fee_type':'quadratic','_fee_multiplier':1}
     with paper.transaction() as c:
         c.execute('INSERT INTO markets(ticker,raw_json,observed_at) VALUES(?,?,?)',('TEST',json.dumps(market),now.isoformat()))
-        c.execute("INSERT INTO research_candidates(ticker,event_key,captured_at,split,model_version,side,price_cents,contracts,fee_usd,probability,net_ev_usd,baseline_action,final_action,source,station,city,market_type,price_bucket,time_bucket,seconds_to_close,observation_age,liquidity,lag_candidate,control) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",('TEST','event',now.isoformat(),'holdout','source-uncertainty-v3','yes',40,2,.04,.9,.96,'BUY_YES','BUY_YES','twc','KAUS','Austin','high','>10c','early',3600,60,2,0,0))
+        c.execute("INSERT INTO research_candidates(ticker,event_key,captured_at,split,model_version,side,price_cents,contracts,fee_usd,probability,net_ev_usd,baseline_action,final_action,source,station,city,market_type,price_bucket,time_bucket,seconds_to_close,observation_age,liquidity,lag_candidate,control) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",('TEST','event',now.isoformat(),'holdout',MODEL_VERSION,'yes',40,2,.04,.9,.96,'BUY_YES','BUY_YES','twc','KAUS','Austin','high','>10c','early',3600,60,2,0,0))
     # Keep date boundaries independent of the time this test runs.
     from datetime import timedelta
     monkeypatch.setattr('src.execution.live_executor.parse_settlement_spec', lambda raw:SimpleNamespace(tradeable=True,observation_window_end=now+timedelta(hours=2),last_trading_time=now+timedelta(hours=2),city='Austin'))
@@ -63,6 +64,17 @@ def test_live_idempotency_survives_restart(tmp_path,monkeypatch):
     with pytest.raises(RuntimeError,match='duplicate'): submit(ex)
     assert len(client.calls)==1
     assert client.calls[0]['client_order_id']=='LIVE-stable'
+
+
+def test_paused_worker_can_reconcile_but_cannot_submit(tmp_path, monkeypatch):
+    ex, client, paper, live, settings = setup(tmp_path, monkeypatch)
+    with live.transaction() as c:
+        c.execute("UPDATE control_state SET value='true' WHERE key='paused'")
+    monitor = LiveExecutor(settings, client, live)
+    assert monitor.audit.cash == 100
+    with pytest.raises(RuntimeError, match='pause'):
+        submit(monitor)
+    assert client.calls == []
 
 
 @pytest.mark.parametrize('block',['stop','marker','stale','balance','readiness','order_limit','unknown_position','total_limit','city_limit','daily_count','daily_loss','drawdown','pagination','auth'])
