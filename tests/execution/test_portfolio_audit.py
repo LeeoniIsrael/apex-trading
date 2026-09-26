@@ -119,3 +119,45 @@ def test_first_production_no_fill_exact_cash_and_fee_regression(tmp_path):
     assert audit.realized_pnl==0
     assert audit.positions['TEST']['contracts']==31
     assert reconcile_portfolio(Database(db.path),c,Decimal('96.0261'),100)==audit
+
+
+@pytest.mark.parametrize('visible_after', [1, 2, 99])
+def test_executor_retries_missing_history_without_post_or_unpausing(tmp_path, monkeypatch, visible_after):
+    from src.execution.live_executor import LiveExecutor
+    from src.execution.portfolio_audit import PendingRemoteOrder
+    db, client, order, fill = fixture(tmp_path)
+    with db.transaction() as conn:
+        conn.execute("INSERT OR REPLACE INTO control_state VALUES('paused','true','test')")
+    calls = []
+    sleeps = []
+    def get_orders(**kwargs):
+        calls.append(1)
+        return {'orders': [order] if len(calls) > visible_after else []}
+    client.get_orders = get_orders
+    client.signer = object()
+    client.get_balance = lambda: {'balance_dollars': '99.1664'}
+    client.create_order = lambda **kw: pytest.fail('reconciliation must never submit')
+    monkeypatch.setattr('src.execution.live_executor.time.sleep', sleeps.append)
+    executor = LiveExecutor.__new__(LiveExecutor)
+    executor.database, executor.client = db, client
+    executor.settings = SimpleNamespace(live_capital_limit_usd=100)
+    if visible_after == 99:
+        with pytest.raises(PendingRemoteOrder): executor.reconcile()
+    else:
+        assert executor.reconcile().open_cost == Decimal('.8336')
+    assert len(calls) == min(visible_after + 1, 3)
+    assert len(sleeps) == len(calls) - 1
+    with db.connect() as conn:
+        assert conn.execute("SELECT value FROM control_state WHERE key='paused'").fetchone()[0] == 'true'
+
+
+def test_executor_does_not_retry_other_audit_failures(tmp_path, monkeypatch):
+    from src.execution.live_executor import LiveExecutor
+    db, client, order, fill = fixture(tmp_path)
+    client.signer = object()
+    client.get_balance = lambda: {'balance_dollars': '98'}
+    monkeypatch.setattr('src.execution.live_executor.time.sleep', lambda _: pytest.fail('must fail closed'))
+    executor = LiveExecutor.__new__(LiveExecutor)
+    executor.database, executor.client = db, client
+    executor.settings = SimpleNamespace(live_capital_limit_usd=100)
+    with pytest.raises(RuntimeError, match='cash mismatch'): executor.reconcile()

@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from datetime import datetime, timezone
 from decimal import Decimal
 
 from src.kalshi.fees import trading_fee_usd
-from src.execution.portfolio_audit import reconcile_portfolio, pages
+from src.execution.portfolio_audit import reconcile_portfolio, pages, PendingRemoteOrder
 from src.kalshi.fee_schedule import effective_fee
 from src.research.experiments import MODEL_VERSION
 from src.research.readiness import database_readiness, launch_failures
@@ -84,9 +85,18 @@ class LiveExecutor:
         return balance
 
     def reconcile(self):
-        self.audit = reconcile_portfolio(self.database, self.client,
-            authenticated_balance(self.client), self.settings.live_capital_limit_usd)
-        return self.audit
+        # Order-history visibility can lag a successful POST. Retry only reads;
+        # every attempt must pass the complete audit before another order is allowed.
+        for attempt in range(3):
+            try:
+                self.audit = reconcile_portfolio(self.database, self.client,
+                    authenticated_balance(self.client), self.settings.live_capital_limit_usd)
+                return self.audit
+            except PendingRemoteOrder:
+                if attempt == 2:
+                    raise
+                time.sleep(1)
+
 
     def submit_order(self, *, ticker, side, action, price_cents, contracts, client_order_id):
         if side not in ('yes','no') or action != 'buy':

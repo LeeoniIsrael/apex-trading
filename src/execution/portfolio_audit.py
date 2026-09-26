@@ -8,6 +8,10 @@ from decimal import Decimal, InvalidOperation
 import json
 
 
+class PendingRemoteOrder(RuntimeError):
+    """A durable intent is not yet visible in exchange order history."""
+
+
 def number(value):
     try:
         result = Decimal(str(value))
@@ -150,7 +154,7 @@ def reconcile_portfolio(database, client, cash, capital_limit):
                 raise RuntimeError('incomplete or resting remote execution')
             statuses[cid] = ('executed' if filled else 'cancelled', filled)
         if any(cid not in statuses for cid in known):
-            raise RuntimeError('ambiguous submission requires reconciliation')
+            raise PendingRemoteOrder('ambiguous submission requires reconciliation')
         paid, realized = Decimal(0), Decimal(0)
         for (kind, ticker), result in prior.items():
             if kind != 'settlement':
