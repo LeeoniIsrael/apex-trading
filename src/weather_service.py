@@ -570,6 +570,28 @@ class WeatherService:
                 if vetoes:
                     decision = Decision(DecisionAction.SKIP, tuple(sorted(set(vetoes))), edge)
             decisions += 1
+            benchmark_details = {"jev_bypassed_obvious": self.jev is not None
+                                 and edge.gross_edge >= self.settings.jev_obvious_edge}
+            if decision.action in {DecisionAction.BUY_YES, DecisionAction.BUY_NO}:
+                benchmark_details["evidence"] = {
+                    "primary_rule": market_metadata.get("rules_primary"),
+                    "official_source": spec.official_source.value,
+                    "measurement": spec.measurement.value,
+                    "station": spec.station_id,
+                    "observation_window": [spec.observation_window_start.isoformat(),spec.observation_window_end.isoformat()],
+                    "observations": [asdict(o) for o in observations
+                                     if spec.observation_window_start <= o.observed_at_utc < spec.observation_window_end],
+                    "ensemble_remaining_extremes_f": ensemble_extremes,
+                    "nws_remaining_extremes_f": nws_extremes,
+                    "forecast_generated_at": [forecast.generated_at_utc.isoformat(),nws_forecast.generated_at_utc.isoformat()],
+                    "observed_extreme_f": observed_extreme,
+                    "model_probability_yes": estimate.probability,
+                    "model_uncertainty_f": estimate.model_uncertainty_f,
+                    "training_days": error_metrics["training_days"],
+                    "side": side, "executable_price_cents": edge.executable_price_cents,
+                    "contracts": contracts, "fee_usd": edge.fee_usd,
+                    "market_gap": market_gap,
+                    "independent_support": independent_support}
             with self.database.transaction() as connection:
                 connection.execute(
                     "INSERT INTO decisions(ticker,decided_at,action,reason_codes,edge_json) "
@@ -583,25 +605,7 @@ class WeatherService:
                     (spec.ticker, now.isoformat(), deterministic_action, jev_action,
                      decision.action.value, jev_latency_ms, jev_cost_usd,
                      edge.executable_price_cents, edge.net_ev_usd, edge.fill_probability,
-                     json.dumps({"jev_bypassed_obvious": self.jev is not None
-                                 and edge.gross_edge >= self.settings.jev_obvious_edge,
-                                 "evidence": {"primary_rule": market_metadata.get("rules_primary"),
-                                   "official_source": spec.official_source.value,
-                                   "measurement": spec.measurement.value,
-                                   "station": spec.station_id,
-                                   "observation_window": [spec.observation_window_start.isoformat(),spec.observation_window_end.isoformat()],
-                                   "observations": [asdict(o) for o in observations],
-                                   "ensemble_remaining_extremes_f": ensemble_extremes,
-                                   "nws_remaining_extremes_f": nws_extremes,
-                                   "forecast_generated_at": [forecast.generated_at_utc.isoformat(),nws_forecast.generated_at_utc.isoformat()],
-                                   "observed_extreme_f": observed_extreme,
-                                   "model_probability_yes": estimate.probability,
-                                   "model_uncertainty_f": estimate.model_uncertainty_f,
-                                   "training_days": error_metrics["training_days"],
-                                   "side": side, "executable_price_cents": edge.executable_price_cents,
-                                   "contracts": contracts, "fee_usd": edge.fee_usd,
-                                   "market_gap": market_gap,
-                                   "independent_support": independent_support}},default=str)),
+                     json.dumps(benchmark_details,default=str)),
                 )
             latest_observation = max(item.observed_at_utc for item in observations)
             latest_temperature = next((item.temperature_f for item in sorted(observations, key=lambda x:x.observed_at_utc, reverse=True) if item.temperature_f is not None), None)

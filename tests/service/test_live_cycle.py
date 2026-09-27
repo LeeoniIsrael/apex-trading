@@ -194,3 +194,17 @@ def test_large_market_disagreement_without_independent_support_skips(tmp_path,mo
     with paper.connect() as c:
         reasons=[json.loads(r[0]) for r in c.execute('SELECT reason_codes FROM decisions')]
     assert any('extreme_market_disagreement' in r for r in reasons)
+
+
+def test_skipped_decisions_do_not_duplicate_raw_weather_payloads(tmp_path,monkeypatch):
+    service,client,paper,live=cycle(tmp_path,monkeypatch)
+    service.settings.min_model_confidence=1.0
+    result=service.run_once()
+    assert result['predictions']==1 and result['live_orders']==0
+    with paper.connect() as c:
+        rows=c.execute("SELECT final_action,details_json FROM decision_benchmarks").fetchall()
+    assert rows
+    for row in rows:
+        assert row['final_action']=='SKIP'
+        assert 'evidence' not in json.loads(row['details_json'])
+        assert len(row['details_json']) < 300
