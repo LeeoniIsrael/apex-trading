@@ -14,19 +14,21 @@ from statistics import mean, stdev
 from src.research.experiments import MODEL_VERSION
 
 
-def evaluate_strategy(database, model_version: str = MODEL_VERSION) -> dict:
+def _settled_signals(database, model_version: str, condition: str):
     with database.connect() as c:
-        rows = c.execute(
+        return c.execute(
             "SELECT r.event_key,r.split,r.captured_at,r.side,r.price_cents,"
             "r.contracts,r.fee_usd,r.probability,s.yes_outcome,s.settled_at "
             "FROM research_candidates r JOIN settlements s ON s.ticker=r.ticker "
-            "WHERE r.model_version=? AND r.baseline_action LIKE 'BUY%' "
+            f"WHERE r.model_version=? AND {condition} "
             "AND s.final=1 AND r.id IN ("
             "SELECT MIN(id) FROM research_candidates WHERE model_version=? "
-            "AND baseline_action LIKE 'BUY%' GROUP BY event_key) "
+            f"AND {condition} GROUP BY event_key) "
             "ORDER BY r.event_key", (model_version, model_version),
         ).fetchall()
 
+
+def _summarize(rows) -> dict:
     groups: dict[str, list[tuple[float, float]]] = {'development': [], 'holdout': []}
     for row in rows:
         if row['captured_at'] >= row['settled_at'] or row['split'] not in groups:
@@ -53,6 +55,14 @@ def evaluate_strategy(database, model_version: str = MODEL_VERSION) -> dict:
             'profitable_evidence': bool(split == 'holdout' and n >= 200
                                         and lower is not None and lower > 0),
         }
-    return {'model_version': model_version, 'development': summary['development'],
-            'holdout': summary['holdout'],
-            'note': 'One pre-settlement signal per station/day; hypothetical fills are not real profit.'}
+    return summary
+
+
+def evaluate_strategy(database, model_version: str = MODEL_VERSION) -> dict:
+    qualified = _summarize(_settled_signals(
+        database, model_version, "baseline_action LIKE 'BUY%'"))
+    lag = _summarize(_settled_signals(
+        database, model_version, 'lag_candidate=1'))
+    return {'model_version': model_version, 'development': qualified['development'],
+            'holdout': qualified['holdout'], 'official_reading_lag': lag,
+            'note': 'One pre-settlement signal per station/day. The lag arm is exploratory; hypothetical fills are not real profit.'}

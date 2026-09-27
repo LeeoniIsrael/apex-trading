@@ -30,7 +30,9 @@ The low-cost autonomous loop is:
 5. When official outcomes arrive, score the first pre-settlement qualifying
    opportunity for each station-day. Keep development and holdout results
    separate; show sample size, Brier score, and fee-adjusted hypothetical return.
-   Do not count sibling temperature ranges as separate wins.
+   Do not count sibling temperature ranges as separate wins. Track the
+   official-reading repricing-lag hypothesis as a separate exploratory arm;
+   it does not authorize real orders.
 6. Use settled **development** events to propose model revisions. Freeze a new
    version before examining its holdout results. Never promote a model or
    resume live trading automatically from a favorable small sample.

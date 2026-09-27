@@ -83,11 +83,13 @@ def test_strategy_evaluation_counts_one_pre_settlement_signal_per_event(tmp_path
             c.execute('INSERT INTO settlements VALUES(?,?,?,?,?,?,?)',
                       (ticker,80,1,'weather_company',1,
                        (now+timedelta(hours=3)).isoformat(),'{}'))
+        c.execute("UPDATE research_candidates SET lag_candidate=1 WHERE ticker IN ('FIRST','SIBLING')")
     result=evaluate_strategy(db)
     summaries=[result['development'],result['holdout']]
     assert sum(item['independent_events'] for item in summaries)==2
     assert sum(item['hypothetical_after_fee_pnl_usd'] for item in summaries)==2.32
     assert not any(item['profitable_evidence'] for item in summaries)
+    assert sum(item['independent_events'] for item in result['official_reading_lag'].values())==1
 
     with db.transaction() as c:
         c.execute('UPDATE settlements SET settled_at=? WHERE ticker=?',
