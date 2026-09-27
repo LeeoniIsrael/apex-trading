@@ -159,6 +159,12 @@ class WeatherService:
             else:
                 nws_forecast = self.nws.fetch_hourly_forecast(station)
                 self._nws_forecast_cache[station.station_id] = (now, nws_forecast)
+            if observations and forecast.members and nws_forecast.members:
+                with self.database.connect() as c:
+                    failed = c.execute("SELECT COALESCE(MAX(id),0) FROM health_events WHERE code='fetch_failed' AND message LIKE ?",(station.station_id+':%',)).fetchone()[0]
+                    recovered = c.execute("SELECT COALESCE(MAX(id),0) FROM health_events WHERE code='fetch_recovered' AND message=?",(station.station_id,)).fetchone()[0]
+                if failed > recovered:
+                    self._record_health('info','weather_provider','fetch_recovered',station.station_id)
             return observations, forecast, nws_forecast
         except Exception as exc:
             self._record_health("error", "weather_provider", "fetch_failed",

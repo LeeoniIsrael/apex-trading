@@ -98,8 +98,15 @@ def database_readiness(database, bankroll=100.0):
         rows = c.execute("SELECT r.*,s.yes_outcome FROM research_candidates r JOIN settlements s "
                          "ON s.ticker=r.ticker AND s.final=1 WHERE r.split='holdout' AND r.model_version=? AND r.id IN "
                          "(SELECT MIN(id) FROM research_candidates WHERE model_version=? AND baseline_action LIKE 'BUY%' GROUP BY event_key)", (MODEL_VERSION, MODEL_VERSION)).fetchall()
-        issues = c.execute("SELECT COUNT(*) FROM health_events WHERE severity IN ('error','critical') "
-                           "OR code IN ('settlement_parser_failure','settlement_reconcile_failed','fetch_failed','unknown_fee_schedule','invalid_fee_multiplier')").fetchone()[0]
+        # Transient provider failures remain blocking until a later successful
+        # full-source fetch for that station. Preserve both events for audit.
+        issues = c.execute("SELECT COUNT(*) FROM health_events h WHERE "
+                           "(h.severity IN ('error','critical') OR h.code IN "
+                           "('settlement_parser_failure','settlement_reconcile_failed','fetch_failed',"
+                           "'unknown_fee_schedule','invalid_fee_multiplier')) "
+                           "AND NOT (h.code='fetch_failed' AND EXISTS ("
+                           "SELECT 1 FROM health_events r WHERE r.code='fetch_recovered' "
+                           "AND r.message=substr(h.message,1,4) AND r.id>h.id))").fetchone()[0]
         checks = {r['name']: bool(r['passed']) and 0 <= (datetime.now(timezone.utc)-datetime.fromisoformat(r['checked_at'])).total_seconds() < 86400
                   for r in c.execute('SELECT * FROM verification_checks')}
         historical = c.execute('SELECT COALESCE(MAX(drawdown),0) FROM equity_history').fetchone()[0]
