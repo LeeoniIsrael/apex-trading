@@ -48,8 +48,38 @@ def record_candidate(db: Database, *, spec, now, side, edge, baseline, final, je
                 liquidity=edge.fillable_contracts, probability_change=probability_change,
                 lag_candidate=int(lag), min_bid_cents=latest_bid, control=int(control))
     with db.transaction() as c:
-        c.execute('INSERT OR IGNORE INTO research_candidates ('+','.join(data)+') VALUES ('+
-                  ','.join('?' for _ in data)+')', tuple(data.values()))
+        # Repeated polling of an unchanged quote and weather reading is one
+        # observation, not thousands of independent research samples. Keep a
+        # periodic heartbeat plus every changed observation, quote, or action.
+        previous = c.execute(
+            'SELECT captured_at,observation_age,side,price_cents,probability,'
+            'contracts,fee_usd,net_ev_usd,spread_cents,jev_action,'
+            'baseline_action,final_action FROM research_candidates '
+            'WHERE ticker=? AND model_version=? ORDER BY id DESC LIMIT 1',
+            (spec.ticker, MODEL_VERSION),
+        ).fetchone()
+        same_state = False
+        if previous:
+            previous_time = datetime.fromisoformat(previous['captured_at'])
+            previous_observation = previous_time.timestamp()-previous['observation_age']
+            current_observation = now.timestamp()-observation_age
+            same_state = (
+                0 <= (now-previous_time).total_seconds() < 900
+                and abs(previous_observation-current_observation) < 1
+                and previous['side'] == side
+                and previous['price_cents'] == price
+                and abs(previous['probability']-edge.model_probability) < .01
+                and previous['contracts'] == edge.fillable_contracts
+                and abs(previous['fee_usd']-edge.fee_usd) < .001
+                and abs(previous['net_ev_usd']-edge.net_ev_usd) < .01
+                and previous['spread_cents'] == edge.spread_cents
+                and previous['jev_action'] == jev
+                and previous['baseline_action'] == baseline
+                and previous['final_action'] == data['final_action']
+            )
+        if not same_state:
+            c.execute('INSERT OR IGNORE INTO research_candidates ('+','.join(data)+') VALUES ('+
+                      ','.join('?' for _ in data)+')', tuple(data.values()))
         if latest_bid is not None:
             c.execute('UPDATE research_candidates SET min_bid_cents=MIN(COALESCE(min_bid_cents,?),?) '
                       'WHERE ticker=? AND side=?', (latest_bid, latest_bid, spec.ticker, side))

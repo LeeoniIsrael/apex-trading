@@ -6,6 +6,7 @@ from pathlib import Path
 
 from src.research.readiness import database_readiness, launch_failures
 from src.research.experiments import MODEL_VERSION
+from src.research.strategy_evaluation import evaluate_strategy
 
 
 def launch_report(database, bankroll, profile='validated'):
@@ -30,6 +31,7 @@ def launch_report(database, bankroll, profile='validated'):
             'research_requirements_waived':[f for f in failures if f not in profile_failures],
             'blockers':blockers,'evidence':asdict(evidence),'candidate_snapshots':candidates,
             'last_prediction':last_prediction,'last_cycle':last_cycle,'checks':checks,
+            'strategy_evaluation':evaluate_strategy(database),
             'note':'Funding never enables trading. No live marker is created by this report.'}
 
 
