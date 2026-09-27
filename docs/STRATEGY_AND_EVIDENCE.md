@@ -35,6 +35,11 @@ The low-cost autonomous loop is:
    version before examining its holdout results. Never promote a model or
    resume live trading automatically from a favorable small sample.
 
+A trading pause leaves this read-only collection and evaluation loop running.
+It blocks every order, and it also suppresses optional paid AI reviews. A
+resume partway through a cycle cannot turn that research-only cycle into a
+trade; the following cycle must pass the controls again.
+
 At the time of this change, the current model has 42 observed station-day
 events, no qualifying settled holdout opportunities, and no new real bets. Its
 high research-row count reflects frequent polling, not independent evidence.

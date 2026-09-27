@@ -65,7 +65,26 @@ def test_full_cycle_respects_both_control_databases(tmp_path,monkeypatch,store,c
     with (live if store=='live' else paper).transaction() as c:
         c.execute('UPDATE control_state SET value=? WHERE key=?',('true',control))
     result=service.run_once()
-    assert not client.calls and result['predictions']==0
+    assert not client.calls and result['predictions']==1 and result['live_orders']==0
+    with paper.connect() as c:
+        assert c.execute('SELECT COUNT(*) FROM research_candidates').fetchone()[0]>=2
+
+
+def test_resume_mid_research_cycle_cannot_submit_an_order(tmp_path,monkeypatch):
+    service,client,paper,live=cycle(tmp_path,monkeypatch)
+    with live.transaction() as c:
+        c.execute("UPDATE control_state SET value='true' WHERE key='paused'")
+    fetch=service._station_data
+
+    def resume_after_cycle_start(*args):
+        with live.transaction() as c:
+            c.execute("UPDATE control_state SET value='false' WHERE key='paused'")
+        return fetch(*args)
+
+    service._station_data=resume_after_cycle_start
+    result=service.run_once()
+    assert result['predictions']==1 and result['live_orders']==0
+    assert not client.calls
 
 
 def test_full_cycle_live_cash_drawdown_blocks_order(tmp_path,monkeypatch):

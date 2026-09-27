@@ -263,9 +263,10 @@ class WeatherService:
             month=datetime.now(timezone.utc).strftime('%Y-%m')
             self.cost_tracker.record('infrastructure',self.settings.monthly_vps_cost_usd,
                                      'Configured monthly VPS and IPv4 cost',f'vps-{month}')
-        if self._control_blocked():
-            return {"markets": 0, "current_tradeable_markets": 0,
-                    "predictions": 0, "decisions": 0, "paper_orders": 0}
+        # A trading pause stops orders, not read-only learning or settlement
+        # collection. Preserve the cycle-start state so a mid-cycle resume
+        # cannot turn an unreviewed research-only signal into an order.
+        research_only = self._control_blocked()
         cancel_stale_paper_orders(self.database)
         reconcile_now = datetime.now(timezone.utc)
         if (self._last_settlement_reconcile is None
@@ -476,6 +477,7 @@ class WeatherService:
             external_vetoes: tuple[str, ...] = ()
             if (
                 self.exception_reviewer is not None
+                and not research_only
                 and not blocks
                 and edge.net_ev_usd > 0
                 and forecast_disagreement >= self.settings.llm_review_disagreement_f
@@ -531,6 +533,7 @@ class WeatherService:
             jev_cost_usd = 0.0
             if (
                 self.jev is not None
+                and not research_only
                 and decision.action in {DecisionAction.BUY_YES, DecisionAction.BUY_NO}
                 and edge.gross_edge < self.settings.jev_obvious_edge
             ):
@@ -636,8 +639,8 @@ class WeatherService:
             if (self.live is not None
                     and exposure > max(0.0, self.settings.live_max_daily_loss_usd+daily_pnl)):
                 continue  # Keep research, but do not overshoot remaining daily cash budget.
-            if self._control_blocked():
-                break
+            if research_only or self._control_blocked():
+                continue
             client_order_id = str(uuid.uuid4())
             if self.live is not None:
                 try:
