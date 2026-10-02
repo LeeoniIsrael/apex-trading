@@ -27,6 +27,10 @@ The low-cost autonomous loop is:
    spread, exposure, cash, daily-loss, and stop checks before any order.
 4. Save research snapshots on a new weather reading, quote, fee, or decision, or
    every 15 minutes when unchanged. Repeated polling is not independent data.
+   Full order books and probability records follow a 15-minute cadence unless
+   weather or the model changes; quote changes within five minutes of a new
+   official reading are kept for the lag study. Repeated skipped decisions are
+   sampled, while every actionable buy retains its full source evidence.
 5. When official outcomes arrive, score the first pre-settlement qualifying
    opportunity for each station-day. Keep development and holdout results
    separate; show sample size, Brier score, and fee-adjusted hypothetical return.
@@ -53,3 +57,8 @@ The automated report is written to `launch-readiness.json` by the existing
 worker at most every ten minutes. `strategy_evaluation` is read-only and never
 authorizes a trade. A positive hypothetical return is not an actual fill or
 profit; deployment and real-money resumption remain separately controlled.
+
+On October 2 the research database reached roughly 7.2 GB, including more
+than two million predictions and order-book records and 1.8 million decision
+records. The sampling change limits future duplicate growth without deleting
+historical records or changing bet selection. Disk space remains monitored.

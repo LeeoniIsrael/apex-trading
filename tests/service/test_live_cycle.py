@@ -227,3 +227,29 @@ def test_skipped_decisions_do_not_duplicate_raw_weather_payloads(tmp_path,monkey
         assert row['final_action']=='SKIP'
         assert 'evidence' not in json.loads(row['details_json'])
         assert len(row['details_json']) < 300
+
+
+def test_unchanged_skipped_cycle_does_not_duplicate_research_payloads(tmp_path,monkeypatch):
+    service,client,paper,live=cycle(tmp_path,monkeypatch)
+    service.settings.min_model_confidence=1.0
+    service.run_once()
+    with paper.connect() as c:
+        before={table:c.execute('SELECT COUNT(*) FROM '+table).fetchone()[0]
+                for table in ('model_predictions','orderbook_snapshots',
+                              'decisions','decision_benchmarks')}
+    service.run_once()
+    with paper.connect() as c:
+        after={table:c.execute('SELECT COUNT(*) FROM '+table).fetchone()[0]
+               for table in before}
+    assert after==before
+
+
+def test_research_sampler_keeps_new_weather_and_every_buy():
+    now=datetime.now(timezone.utc)
+    cache={}
+    assert WeatherService._snapshot_due(cache,'TEST',now,('weather-1',))
+    cache['TEST']=(now,('weather-1',))
+    assert not WeatherService._snapshot_due(cache,'TEST',now+timedelta(minutes=1),('weather-1',))
+    assert WeatherService._snapshot_due(cache,'TEST',now+timedelta(minutes=1),('weather-2',))
+    assert WeatherService._snapshot_due(cache,'TEST',now+timedelta(minutes=15),('weather-1',))
+    assert WeatherService._snapshot_due(cache,'TEST',now,('weather-1',),force=True)

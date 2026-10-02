@@ -103,6 +103,16 @@ class WeatherService:
         self._cadence_minutes: set[int] = set()
         self._last_settlement_reconcile: datetime | None = None
         self._error_metrics_cache: tuple[datetime, dict] | None = None
+        self._prediction_log_cache: dict[str, tuple[datetime, tuple]] = {}
+        self._orderbook_log_cache: dict[str, tuple[datetime, tuple]] = {}
+        self._decision_log_cache: dict[str, tuple[datetime, tuple]] = {}
+
+    @staticmethod
+    def _snapshot_due(cache: dict[str, tuple[datetime, tuple]], ticker: str,
+                      now: datetime, signature: tuple, *, force: bool = False) -> bool:
+        previous = cache.get(ticker)
+        return (force or previous is None or previous[1] != signature
+                or (now - previous[0]).total_seconds() >= 900)
 
     def _record_health(self, severity: str, component: str, code: str, message: str) -> None:
         with self.database.transaction() as connection:
@@ -406,16 +416,24 @@ class WeatherService:
                 forecast_error_std_f=error_metrics["forecast_error_std_f"],
             )
             predictions += 1
-            with self.database.transaction() as connection:
-                connection.execute(
-                    "INSERT INTO model_predictions(ticker,predicted_at,model_version,probability," 
-                    "confidence_low,confidence_high,inputs_json,high_so_far_f) VALUES(?,?,?,?,?,?,?,?)",
-                    (spec.ticker, now.isoformat(), MODEL_VERSION, estimate.probability,
-                     estimate.confidence_low, estimate.confidence_high,
-                     json.dumps({"members": len(remaining), "uncertainty_f": estimate.model_uncertainty_f,
-                                 "training_days": error_metrics["training_days"]}),
-                     observed_extreme),
-                )
+            latest_observation = max(item.observed_at_utc for item in observations)
+            prediction_signature = (
+                latest_observation, forecast.generated_at_utc, nws_forecast.generated_at_utc,
+                round(estimate.probability, 2), observed_extreme,
+            )
+            if self._snapshot_due(self._prediction_log_cache, spec.ticker, now,
+                                  prediction_signature):
+                with self.database.transaction() as connection:
+                    connection.execute(
+                        "INSERT INTO model_predictions(ticker,predicted_at,model_version,probability,"
+                        "confidence_low,confidence_high,inputs_json,high_so_far_f) VALUES(?,?,?,?,?,?,?,?)",
+                        (spec.ticker, now.isoformat(), MODEL_VERSION, estimate.probability,
+                         estimate.confidence_low, estimate.confidence_high,
+                         json.dumps({"members": len(remaining), "uncertainty_f": estimate.model_uncertainty_f,
+                                     "training_days": error_metrics["training_days"]}),
+                         observed_extreme),
+                    )
+                self._prediction_log_cache[spec.ticker] = (now, prediction_signature)
 
             try:
                 raw_book = self.client.get_orderbook(spec.ticker, depth=100)
@@ -437,11 +455,19 @@ class WeatherService:
             except (KeyError, ValueError, InvalidOperation):
                 self._record_health("warning", "fees", "invalid_fee_multiplier", spec.ticker)
                 continue
-            with self.database.transaction() as connection:
-                connection.execute(
-                    "INSERT INTO orderbook_snapshots(ticker,captured_at,orderbook_json) VALUES(?,?,?)",
-                    (spec.ticker, now.isoformat(), json.dumps(raw_book)),
-                )
+            observation_age = (now - latest_observation).total_seconds()
+            recent_observation = 0 <= observation_age <= 300
+            top_of_book = tuple((book.best_bid(side), book.best_ask(side))
+                                for side in ('yes', 'no'))
+            book_signature = (latest_observation, top_of_book if recent_observation else None)
+            if self._snapshot_due(self._orderbook_log_cache, spec.ticker, now,
+                                  book_signature):
+                with self.database.transaction() as connection:
+                    connection.execute(
+                        "INSERT INTO orderbook_snapshots(ticker,captured_at,orderbook_json) VALUES(?,?,?)",
+                        (spec.ticker, now.isoformat(), json.dumps(raw_book)),
+                    )
+                self._orderbook_log_cache[spec.ticker] = (now, book_signature)
 
             with self.database.transaction() as connection:
                 for held_side in ('yes', 'no'):
@@ -579,44 +605,53 @@ class WeatherService:
                 if vetoes:
                     decision = Decision(DecisionAction.SKIP, tuple(sorted(set(vetoes))), edge)
             decisions += 1
-            benchmark_details = {"jev_bypassed_obvious": self.jev is not None
-                                 and edge.gross_edge >= self.settings.jev_obvious_edge}
-            if decision.action in {DecisionAction.BUY_YES, DecisionAction.BUY_NO}:
-                benchmark_details["evidence"] = {
-                    "primary_rule": market_metadata.get("rules_primary"),
-                    "official_source": spec.official_source.value,
-                    "measurement": spec.measurement.value,
-                    "station": spec.station_id,
-                    "observation_window": [spec.observation_window_start.isoformat(),spec.observation_window_end.isoformat()],
-                    "observations": [asdict(o) for o in observations
-                                     if spec.observation_window_start <= o.observed_at_utc < spec.observation_window_end],
-                    "ensemble_remaining_extremes_f": ensemble_extremes,
-                    "nws_remaining_extremes_f": nws_extremes,
-                    "forecast_generated_at": [forecast.generated_at_utc.isoformat(),nws_forecast.generated_at_utc.isoformat()],
-                    "observed_extreme_f": observed_extreme,
-                    "model_probability_yes": estimate.probability,
-                    "model_uncertainty_f": estimate.model_uncertainty_f,
-                    "training_days": error_metrics["training_days"],
-                    "side": side, "executable_price_cents": edge.executable_price_cents,
-                    "contracts": contracts, "fee_usd": edge.fee_usd,
-                    "market_gap": market_gap,
-                    "independent_support": independent_support}
-            with self.database.transaction() as connection:
-                connection.execute(
-                    "INSERT INTO decisions(ticker,decided_at,action,reason_codes,edge_json) "
-                    "VALUES(?,?,?,?,?)", (spec.ticker, now.isoformat(), decision.action.value,
-                    json.dumps(decision.reason_codes), json.dumps(asdict(edge))),
-                )
-                connection.execute(
-                    "INSERT INTO decision_benchmarks(ticker,decided_at,deterministic_action,"
-                    "jev_action,final_action,latency_ms,api_cost_usd,entry_price_cents,"
-                    "net_ev_usd,fill_probability,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                    (spec.ticker, now.isoformat(), deterministic_action, jev_action,
-                     decision.action.value, jev_latency_ms, jev_cost_usd,
-                     edge.executable_price_cents, edge.net_ev_usd, edge.fill_probability,
-                     json.dumps(benchmark_details,default=str)),
-                )
-            latest_observation = max(item.observed_at_utc for item in observations)
+            decision_signature = (decision.action.value, decision.reason_codes,
+                                  deterministic_action, jev_action)
+            buying = decision.action in {DecisionAction.BUY_YES, DecisionAction.BUY_NO}
+            should_log = self._snapshot_due(
+                self._decision_log_cache, spec.ticker, now, decision_signature,
+                force=buying and not research_only and spec.ticker not in open_tickers,
+            )
+            if should_log:
+                benchmark_details = {"jev_bypassed_obvious": self.jev is not None
+                                     and edge.gross_edge >= self.settings.jev_obvious_edge}
+                if buying:
+                    benchmark_details["evidence"] = {
+                        "primary_rule": market_metadata.get("rules_primary"),
+                        "official_source": spec.official_source.value,
+                        "measurement": spec.measurement.value,
+                        "station": spec.station_id,
+                        "observation_window": [spec.observation_window_start.isoformat(),spec.observation_window_end.isoformat()],
+                        "observations": [asdict(o) for o in observations
+                                         if spec.observation_window_start <= o.observed_at_utc < spec.observation_window_end],
+                        "ensemble_remaining_extremes_f": ensemble_extremes,
+                        "nws_remaining_extremes_f": nws_extremes,
+                        "forecast_generated_at": [forecast.generated_at_utc.isoformat(),nws_forecast.generated_at_utc.isoformat()],
+                        "observed_extreme_f": observed_extreme,
+                        "model_probability_yes": estimate.probability,
+                        "model_uncertainty_f": estimate.model_uncertainty_f,
+                        "training_days": error_metrics["training_days"],
+                        "side": side, "executable_price_cents": edge.executable_price_cents,
+                        "contracts": contracts, "fee_usd": edge.fee_usd,
+                        "market_gap": market_gap,
+                        "independent_support": independent_support,
+                    }
+                with self.database.transaction() as connection:
+                    connection.execute(
+                        "INSERT INTO decisions(ticker,decided_at,action,reason_codes,edge_json) "
+                        "VALUES(?,?,?,?,?)", (spec.ticker, now.isoformat(), decision.action.value,
+                        json.dumps(decision.reason_codes), json.dumps(asdict(edge))),
+                    )
+                    connection.execute(
+                        "INSERT INTO decision_benchmarks(ticker,decided_at,deterministic_action,"
+                        "jev_action,final_action,latency_ms,api_cost_usd,entry_price_cents,"
+                        "net_ev_usd,fill_probability,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                        (spec.ticker, now.isoformat(), deterministic_action, jev_action,
+                         decision.action.value, jev_latency_ms, jev_cost_usd,
+                         edge.executable_price_cents, edge.net_ev_usd, edge.fill_probability,
+                         json.dumps(benchmark_details,default=str)),
+                    )
+                self._decision_log_cache[spec.ticker] = (now, decision_signature)
             latest_temperature = next((item.temperature_f for item in sorted(observations, key=lambda x:x.observed_at_utc, reverse=True) if item.temperature_f is not None), None)
             forecast_points = [point for member in forecast.members for point in member]
             predicted_temperature = (min(forecast_points, key=lambda p:abs((p.valid_at_utc-latest_observation).total_seconds())).temperature_f if forecast_points else None)
