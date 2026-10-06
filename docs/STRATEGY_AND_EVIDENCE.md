@@ -62,3 +62,8 @@ On October 2 the research database reached roughly 7.2 GB, including more
 than two million predictions and order-book records and 1.8 million decision
 records. The sampling change limits future duplicate growth without deleting
 historical records or changing bet selection. Disk space remains monitored.
+
+On October 5, forecast-error scoring was found to scan the entire multi-million
+row weather-forecast table for each saved forecast run. An index on forecast-run
+ID and valid time makes those lookups local. This changes research-cycle
+performance only; it does not change forecasts, model thresholds, or orders.

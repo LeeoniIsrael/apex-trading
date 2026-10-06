@@ -28,3 +28,10 @@ def test_final_twc_errors_use_only_before_day_forecasts(tmp_path):
     assert result['training_days']+result['holdout_days']==1
     assert result['forecast_error_std_f']==4.0
     assert error_summary(db,start+timedelta(hours=1))['training_days']==0
+    with db.connect() as c:
+        plan = c.execute(
+            'EXPLAIN QUERY PLAN SELECT member,temperature_f FROM weather_forecasts '
+            'WHERE forecast_run_id=? AND valid_at_utc>=? AND valid_at_utc<?',
+            (run, start.isoformat(), (start+timedelta(days=1)).isoformat()),
+        ).fetchall()
+    assert any('idx_weather_forecasts_run_time' in row[3] for row in plan)

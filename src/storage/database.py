@@ -170,6 +170,10 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         PRIMARY KEY(kind, remote_id)
     );
     """),
+    (7, """
+    CREATE INDEX IF NOT EXISTS idx_weather_forecasts_run_time
+        ON weather_forecasts(forecast_run_id, valid_at_utc);
+    """),
 )
 
 
