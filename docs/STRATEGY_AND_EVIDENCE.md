@@ -67,3 +67,14 @@ On October 5, forecast-error scoring was found to scan the entire multi-million
 row weather-forecast table for each saved forecast run. An index on forecast-run
 ID and valid time makes those lookups local. This changes research-cycle
 performance only; it does not change forecasts, model thresholds, or orders.
+
+On October 6, a shadow station-bias correction was checked against 87
+independent Weather Company holdout outcomes. The predeclared correction used
+at least eight prior development outcomes per station and high/low type, shrank
+the mean error by `n/(n+20)`, and capped it at 2°F. Requiring each training
+outcome to have settled before the evaluated forecast left only seven corrected
+holdout cases. Overall mean absolute error changed from 3.203°F to 3.190°F;
+high-temperature error worsened slightly. This is too little prospective
+evidence to alter live probabilities or loosen any trading guard. Earlier
+comparisons that allowed later outcomes into earlier evaluations overstated
+the apparent improvement.
