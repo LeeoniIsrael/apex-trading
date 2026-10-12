@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from src.research.experiments import allocation, record_candidate, report
 from src.research.readiness import database_readiness, ReadinessEvidence, ReadinessPolicy, evaluate_readiness
-from src.research.strategy_evaluation import evaluate_strategy
+from src.research.strategy_evaluation import PRICED_LAG_START, evaluate_strategy
 from src.storage.database import Database
 
 
@@ -37,6 +37,40 @@ def test_repeated_snapshots_count_once_and_controls_have_no_actual_profit(tmp_pa
 def test_nan_cannot_pass_readiness():
     ready,failures=evaluate_readiness(ReadinessEvidence(5000,200,float('nan'),float('nan'),2,.01,0,0),ReadinessPolicy())
     assert not ready and 'nonfinite_evidence' in failures and 'calibration_gate' in failures
+
+
+def test_priced_lag_shadow_is_prospective_and_requires_execution_quality(tmp_path):
+    db=Database(tmp_path/'db'); db.migrate()
+    start=datetime.fromisoformat(PRICED_LAG_START)
+    cases=[('HISTORY',-60,.36,2,0,60), ('NO_EDGE',1,-.1,2,0,60),
+           ('WIDE',2,.36,9,0,60), ('CONFLICT',3,.36,2,11,60),
+           ('FUTURE_READING',4,.36,2,0,-1), ('VALID',5,.36,2,0,60),
+           ('SIBLING',6,.36,2,0,60)]
+    for ticker,minute,ev,spread,disagreement,age in cases:
+        spec=SimpleNamespace(ticker=ticker,station_id='KAUS',
+            official_source=SimpleNamespace(value='weather_company'),
+            market_date=start.date(),measurement=SimpleNamespace(value='high'),
+            last_trading_time=start+timedelta(hours=2),city='Austin')
+        edge=SimpleNamespace(executable_price_cents=40,fillable_contracts=2,
+            fee_usd=.04,model_probability=.8,net_ev_usd=ev,spread_cents=spread)
+        record_candidate(db,spec=spec,now=start+timedelta(minutes=minute),side='yes',
+            edge=edge,baseline='SKIP',final='SKIP',jev=None,observation_age=age,
+            surprise=None,disagreement=disagreement,probability_change=.1,
+            book_change=.01,latest_bid=35)
+    with db.transaction() as c:
+        for ticker,*_ in cases:
+            c.execute('INSERT INTO settlements VALUES(?,?,?,?,?,?,?)',
+                (ticker,80,1,'weather_company',1,
+                 (start+timedelta(hours=3)).isoformat(),'{}'))
+    result=evaluate_strategy(db)
+    arm=result['priced_lag_shadow_v1']
+    assert sum(arm[s]['independent_events'] for s in ('development','holdout'))==1
+    assert sum(arm[s]['hypothetical_after_fee_pnl_usd'] for s in ('development','holdout'))==1.16
+    assert sum(result[s]['independent_events'] for s in ('development','holdout'))==0
+    with db.transaction() as c:
+        c.execute("DELETE FROM research_candidates WHERE ticker IN ('VALID','SIBLING')")
+    arm=evaluate_strategy(db)['priced_lag_shadow_v1']
+    assert sum(arm[s]['independent_events'] for s in ('development','holdout'))==0
 
 
 def test_candidate_sampling_keeps_changes_but_not_identical_polling(tmp_path):

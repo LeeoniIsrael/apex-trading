@@ -78,3 +78,15 @@ high-temperature error worsened slightly. This is too little prospective
 evidence to alter live probabilities or loosen any trading guard. Earlier
 comparisons that allowed later outcomes into earlier evaluations overstated
 the apparent improvement.
+
+On October 12, 11 of the last 21 recorded fresh-reading lag signals had
+nonpositive modeled after-fee EV, and nine exceeded the 8-cent spread guard
+(these groups can overlap). The broad exploratory arm remains unchanged.
+A separate `priced_lag_shadow_v1` hypothesis is frozen before collection starts
+at 2026-10-13 00:00 UTC: a Weather Company reading aged 0–300 seconds, positive
+modeled after-fee EV, spread at most 8 cents, and forecast-family disagreement
+at most 10°F. It scores the first qualifying signal per station-day, with
+development and holdout kept separate. Older rows cannot validate this new
+hypothesis. Model-confidence and all other live guards still apply to orders;
+the shadow report grants no trading permission and its hypothetical fills
+do not establish actual profit.
