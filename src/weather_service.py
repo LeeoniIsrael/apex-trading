@@ -24,6 +24,7 @@ from src.research.collector import MarketCollector
 from src.research.accounting import paper_account
 from src.research.experiments import MODEL_VERSION, record_candidate
 from src.research.forecast_error import error_summary
+from src.research.consensus_no import record_signal as record_consensus_no
 from src.research.settlements import SettlementReconciler
 from src.risk.exposure import RiskPolicy, RiskState, risk_blocks
 from src.risk.sizing import SizingLimits, size_contracts
@@ -488,6 +489,20 @@ class WeatherService:
             edge=choices[0]
             side=edge.side
             side_probability=edge.model_probability
+            if research_only:
+                record_consensus_no(
+                    self.database, spec=spec, now=now, edge=edge,
+                    observation_age=(now-latest_observation).total_seconds(),
+                    disagreement=forecast_disagreement,
+                    forecasts_fresh=(not forecast.is_stale(now,timedelta(hours=8))
+                                     and not nws_forecast.is_stale(now,timedelta(hours=3))
+                                     and forecast.generated_at_utc <= now
+                                     and nws_forecast.generated_at_utc <= now),
+                    evidence={'observed_extreme_f':observed_extreme,
+                              'ensemble_extremes_f':ensemble_extremes,
+                              'nws_extremes_f':nws_extremes,
+                              'forecast_times':[forecast.generated_at_utc,nws_forecast.generated_at_utc]},
+                )
             best_ask=book.best_ask(side)
             contracts=edge.contracts
             exposure = contracts * edge.executable_price_cents / 100 + edge.fee_usd

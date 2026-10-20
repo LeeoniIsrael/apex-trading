@@ -174,6 +174,15 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     CREATE INDEX IF NOT EXISTS idx_weather_forecasts_run_time
         ON weather_forecasts(forecast_run_id, valid_at_utc);
     """),
+    (8, """
+    CREATE TABLE IF NOT EXISTS shadow_signals (
+        id INTEGER PRIMARY KEY, strategy_version TEXT NOT NULL,
+        event_key TEXT NOT NULL, ticker TEXT NOT NULL, split TEXT NOT NULL,
+        captured_at TEXT NOT NULL, side TEXT NOT NULL, price_cents REAL NOT NULL,
+        contracts INTEGER NOT NULL, fee_usd REAL NOT NULL, probability REAL NOT NULL,
+        evidence_json TEXT NOT NULL, UNIQUE(strategy_version,event_key)
+    );
+    """),
 )
 
 

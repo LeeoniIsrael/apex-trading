@@ -90,3 +90,35 @@ development and holdout kept separate. Older rows cannot validate this new
 hypothesis. Model-confidence and all other live guards still apply to orders;
 the shadow report grants no trading permission and its hypothetical fills
 do not establish actual profit.
+
+## Fresh consensus NO paper strategy — frozen October 20
+
+The nine settled priced-lag examples inspected on October 20 all bought YES
+and lost, often just outside a narrow range. A 3°F already-crossed-boundary NO
+test produced zero development opportunities at the available prices, so it
+was not deployed. The alternative `fresh-consensus-no-v1` tests saved best-side
+NO opportunities with these fixed gates: named Weather Company daily market,
+reading at most 30 minutes old, both forecasts fresh and their remaining
+extremes within 3°F, at most six hours to close, modeled NO probability at least
+90%, ask at most 85 cents, spread at most 8 cents, and at least five cents per
+contract of estimated value after fees using a fixed 90% probability ceiling.
+The fee-inclusive position cost cannot exceed $2. The 90% ceiling is an
+uncalibrated stress assumption, not a promised win rate.
+
+The replay selects the first eligible station-day signal before joining final
+outcomes, uses only forecast runs generated and ingested before the signal,
+and uses saved executable asks and fees. It found eight settled development
+events, seven wins and one loss, totaling **+$1.00 hypothetically after fees**.
+There were **zero qualifying holdout events**. Historical rules are taken from
+the saved market record; this is a diagnostic replay, not proof of attainable
+fills or profit. The previously inspected holdout is not a fresh validation set.
+No strategy threshold was changed after that holdout query.
+
+Prospective collection starts at **2026-10-21 00:00 UTC**. A separate small
+`shadow_signals` table keeps one opportunity per station-day plus the exact
+rule, observed extreme, forecast extremes/timestamps, ask, quantity and fee.
+The research service records it only while trading is blocked. The strategy
+has no executor or account-control path; existing live guards, pause state,
+$2 per-bet and $5 daily limits are preserved. The launch report publishes its
+development and holdout results under `fresh_consensus_no_v1`. Reproduce the
+historical study with `src.research.consensus_no.replay(database, split)`.

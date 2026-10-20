@@ -253,3 +253,16 @@ def test_research_sampler_keeps_new_weather_and_every_buy():
     assert WeatherService._snapshot_due(cache,'TEST',now+timedelta(minutes=1),('weather-2',))
     assert WeatherService._snapshot_due(cache,'TEST',now+timedelta(minutes=15),('weather-1',))
     assert WeatherService._snapshot_due(cache,'TEST',now,('weather-1',),force=True)
+
+
+def test_consensus_shadow_is_collected_only_during_research_without_orders(tmp_path,monkeypatch):
+    service,client,paper,live=cycle(tmp_path,monkeypatch)
+    calls=[]
+    monkeypatch.setattr('src.weather_service.record_consensus_no',lambda *a,**k:calls.append(k))
+    with live.transaction() as c:c.execute("UPDATE control_state SET value='true' WHERE key='paused'")
+    service.run_once()
+    assert len(calls)==1 and calls[0]['forecasts_fresh']
+    assert not client.calls
+    with live.connect() as c:
+        assert c.execute('SELECT COUNT(*) FROM orders').fetchone()[0]==0
+        assert c.execute("SELECT value FROM control_state WHERE key='paused'").fetchone()[0]=='true'

@@ -63,6 +63,12 @@ def _summarize(rows) -> dict:
 
 
 def evaluate_strategy(database, model_version: str = MODEL_VERSION) -> dict:
+    from src.research.consensus_no import VERSION, START
+    with database.connect() as c:
+        consensus_rows = c.execute(
+            'SELECT r.*,s.yes_outcome,s.settled_at FROM shadow_signals r '
+            'JOIN settlements s ON s.ticker=r.ticker WHERE r.strategy_version=? '
+            'AND s.final=1',(VERSION,)).fetchall()
     qualified = _summarize(_settled_signals(
         database, model_version, "baseline_action LIKE 'BUY%'"))
     lag = _summarize(_settled_signals(
@@ -76,6 +82,8 @@ def evaluate_strategy(database, model_version: str = MODEL_VERSION) -> dict:
         f"AND captured_at>='{PRICED_LAG_START}'"))
     return {'model_version': model_version, 'development': qualified['development'],
             'holdout': qualified['holdout'], 'official_reading_lag': lag,
+            'fresh_consensus_no_v1': {'starts_at':START, **_summarize(consensus_rows),
+                                     'note':'Paper shadow only. No order path; assumes saved ask fills.'},
             'priced_lag_shadow_v1': {
                 'starts_at': PRICED_LAG_START, **priced_lag,
                 'note': 'Prospective exploratory arm: positive modeled after-fee EV, spread <=8c, fresh official reading and forecast agreement. Other live guards still apply; this arm never authorizes orders.',
