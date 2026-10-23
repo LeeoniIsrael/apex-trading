@@ -91,7 +91,7 @@ hypothesis. Model-confidence and all other live guards still apply to orders;
 the shadow report grants no trading permission and its hypothetical fills
 do not establish actual profit.
 
-## Fresh consensus NO paper strategy — frozen October 20
+## Fresh consensus NO paper strategy — version 1 retired October 23
 
 The nine settled priced-lag examples inspected on October 20 all bought YES
 and lost, often just outside a narrow range. A 3°F already-crossed-boundary NO
@@ -114,7 +114,24 @@ the saved market record; this is a diagnostic replay, not proof of attainable
 fills or profit. The previously inspected holdout is not a fresh validation set.
 No strategy threshold was changed after that holdout query.
 
-Prospective collection starts at **2026-10-21 00:00 UTC**. A separate small
+Prospective collection started at **2026-10-21 00:00 UTC**. Its first settled
+development signal lost **-$1.99 hypothetically after fees**: it bought NO at
+2 cents against a 98-cent YES market while the model's capped NO estimate was
+90%. The final Weather Company minimum was 54°F, inside the 53--54°F YES bin.
+That one loss does not prove a general result, but the 88-point price conflict
+shows the model had no evidence strong enough to take the other side. Version
+1 is retired and stays in the report as an audit record; it will not collect
+more signals.
+
+Version 2 begins at **2026-10-23 16:00 UTC**. It preserves every version 1
+gate and adds a fixed 30-point model-versus-market disagreement guard. A larger
+gap is allowed only when a preliminary official daily extreme has already made
+the YES contract impossible (a low already below its required lower bound, or
+a high already above its required upper bound). Forecasts and current
+temperatures alone cannot override the market. This is a prospective paper
+test, not a claim that version 2 is profitable.
+
+A separate small
 `shadow_signals` table keeps one opportunity per station-day plus the exact
 rule, observed extreme, forecast extremes/timestamps, ask, quantity and fee.
 The research service records it only while trading is blocked. The strategy

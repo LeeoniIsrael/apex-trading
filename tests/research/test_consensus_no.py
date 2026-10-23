@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.research.consensus_no import qualifies,record_signal,replay
+from src.research.consensus_no import direct_no_evidence,qualifies,record_signal,replay
 from src.research.experiments import record_candidate
 from src.research.strategy_evaluation import evaluate_strategy
 from src.storage.database import Database
@@ -33,10 +33,10 @@ def test_rejects_unsupported_or_unaffordable_shadow_signal(key,value):
 
 def fixture(tmp_path):
     db=Database(tmp_path/'research');db.migrate()
-    now=datetime(2026,10,22,23,tzinfo=timezone.utc)
-    raw=dict(ticker='KXHIGHAUS-26OCT22-B75.5',event_ticker='KXHIGHAUS-26OCT22',
-             series_ticker='KXHIGHAUS',close_time='2026-10-23T05:00:00Z',
-             rules_primary='If the maximum temperature recorded at Austin (CLIAUS) for Oct 22, 2026, is between 75-76° fahrenheit according to The Weather Company, then the market resolves to Yes.')
+    now=datetime(2026,10,23,23,tzinfo=timezone.utc)
+    raw=dict(ticker='KXHIGHAUS-26OCT23-B75.5',event_ticker='KXHIGHAUS-26OCT23',
+             series_ticker='KXHIGHAUS',close_time='2026-10-24T05:00:00Z',
+             rules_primary='If the maximum temperature recorded at Austin (CLIAUS) for Oct 23, 2026, is between 75-76° fahrenheit according to The Weather Company, then the market resolves to Yes.')
     spec=parse_settlement_spec(raw);assert spec.last_trading_time
     edge=SimpleNamespace(side='no',model_probability=.95,executable_price_cents=80,
                          contracts=2,fillable_contracts=2,fee_usd=.03,
@@ -62,9 +62,22 @@ def test_shadow_records_one_event_with_evidence_and_cannot_place_order(tmp_path)
         c.execute('INSERT INTO settlements VALUES(?,?,?,?,?,?,?)',
                   (spec.ticker,80,0,'weather_company',1,(now+timedelta(hours=8)).isoformat(),'{}'))
     report=evaluate_strategy(db)
-    assert sum(report['fresh_consensus_no_v1'][s]['independent_events']
+    assert sum(report['fresh_consensus_no_v2'][s]['independent_events']
                for s in ('development','holdout'))==1
     assert sum(report[s]['independent_events'] for s in ('development','holdout'))==0
+
+
+def test_large_model_market_gap_requires_an_observed_extreme_that_rules_yes_out(tmp_path):
+    db,now,raw,spec,edge=fixture(tmp_path)
+    cheap_edge=SimpleNamespace(**{**vars(edge), 'executable_price_cents':2})
+    kwargs=dict(database=db,spec=spec,now=now,edge=cheap_edge,
+                observation_age=60,disagreement=1,forecasts_fresh=True,
+                evidence={'observed_extreme_f':74.0})
+    assert not record_signal(**kwargs)
+    # This high contract is 75--76; a recorded 77 degree daily high makes YES
+    # impossible, unlike an ordinary forecast disagreement.
+    assert direct_no_evidence(spec,77.0)
+    assert record_signal(**{**kwargs,'evidence':{'observed_extreme_f':77.0}})
 
 
 def test_replay_uses_first_signal_and_requires_forecasts_known_before_signal(tmp_path):

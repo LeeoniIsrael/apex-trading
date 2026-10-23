@@ -4,10 +4,16 @@ import math
 from datetime import datetime
 
 from src.research.experiments import MODEL_VERSION, allocation
-from src.strategy.settlement import MarketType, OfficialSource, parse_settlement_spec
+from src.strategy.settlement import Measurement, MarketType, OfficialSource, parse_settlement_spec
 
-VERSION = 'fresh-consensus-no-v1'
-START = '2026-10-21T00:00:00+00:00'
+# The first prospective v1 example exposed a 90-point disagreement between the
+# model and an executable market price.  A conservative probability ceiling is
+# not independent evidence strong enough to override that disagreement.  Keep
+# v1 rows as their own audit record and begin this corrected paper arm forward.
+LEGACY_VERSION = 'fresh-consensus-no-v1'
+VERSION = 'fresh-consensus-no-v2'
+START = '2026-10-23T16:00:00+00:00'
+MAX_MODEL_MARKET_GAP = .30
 
 
 def qualifies(row):
@@ -36,6 +42,24 @@ def source_valid(spec, now):
             and spec.last_trading_time is not None and now < spec.last_trading_time)
 
 
+def direct_no_evidence(spec, observed_extreme):
+    """Whether an already-recorded daily extreme has made YES impossible.
+
+    A day's low can only fall and a day's high can only rise.  Forecasts and a
+    current temperature do not establish this condition: they remain uncertain
+    about the rest of the settlement day.
+    """
+    if observed_extreme is None or not math.isfinite(observed_extreme):
+        return False
+    if spec.measurement == Measurement.LOW and spec.threshold_low is not None:
+        return (observed_extreme < spec.threshold_low
+                or (observed_extreme == spec.threshold_low and not spec.inclusive_low))
+    if spec.measurement == Measurement.HIGH and spec.threshold_high is not None:
+        return (observed_extreme > spec.threshold_high
+                or (observed_extreme == spec.threshold_high and not spec.inclusive_high))
+    return False
+
+
 def record_signal(database, *, spec, now, edge, observation_age, disagreement,
                   forecasts_fresh, evidence):
     if now < datetime.fromisoformat(START) or not forecasts_fresh or not source_valid(spec, now):
@@ -47,6 +71,12 @@ def record_signal(database, *, spec, now, edge, observation_age, disagreement,
                forecast_disagreement_f=disagreement,
                seconds_to_close=(spec.last_trading_time-now).total_seconds())
     if not qualifies(row):
+        return False
+    # A large model-versus-market gap is a data-quality warning, not an edge.
+    # Permit it only when a preliminary official extreme has already ruled the
+    # YES contract out by monotonic daily-extreme logic.
+    if (abs(.90 - row['price_cents'] / 100) > MAX_MODEL_MARKET_GAP
+            and not direct_no_evidence(spec, evidence.get('observed_extreme_f'))):
         return False
     event = '|'.join((spec.station_id, str(spec.market_date)))
     split, _ = allocation(event)

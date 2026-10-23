@@ -63,12 +63,16 @@ def _summarize(rows) -> dict:
 
 
 def evaluate_strategy(database, model_version: str = MODEL_VERSION) -> dict:
-    from src.research.consensus_no import VERSION, START
+    from src.research.consensus_no import LEGACY_VERSION, VERSION, START
     with database.connect() as c:
         consensus_rows = c.execute(
             'SELECT r.*,s.yes_outcome,s.settled_at FROM shadow_signals r '
             'JOIN settlements s ON s.ticker=r.ticker WHERE r.strategy_version=? '
             'AND s.final=1',(VERSION,)).fetchall()
+        legacy_consensus_rows = c.execute(
+            'SELECT r.*,s.yes_outcome,s.settled_at FROM shadow_signals r '
+            'JOIN settlements s ON s.ticker=r.ticker WHERE r.strategy_version=? '
+            'AND s.final=1',(LEGACY_VERSION,)).fetchall()
     qualified = _summarize(_settled_signals(
         database, model_version, "baseline_action LIKE 'BUY%'"))
     lag = _summarize(_settled_signals(
@@ -82,8 +86,12 @@ def evaluate_strategy(database, model_version: str = MODEL_VERSION) -> dict:
         f"AND captured_at>='{PRICED_LAG_START}'"))
     return {'model_version': model_version, 'development': qualified['development'],
             'holdout': qualified['holdout'], 'official_reading_lag': lag,
-            'fresh_consensus_no_v1': {'starts_at':START, **_summarize(consensus_rows),
+            'fresh_consensus_no_v2': {'starts_at':START, **_summarize(consensus_rows),
                                      'note':'Paper shadow only. No order path; assumes saved ask fills.'},
+            'fresh_consensus_no_v1': {
+                **_summarize(legacy_consensus_rows),
+                'note': 'Retired after its first prospective signal revealed an unsupported model-market disagreement. Historical paper rows remain for audit only.',
+            },
             'priced_lag_shadow_v1': {
                 'starts_at': PRICED_LAG_START, **priced_lag,
                 'note': 'Prospective exploratory arm: positive modeled after-fee EV, spread <=8c, fresh official reading and forecast agreement. Other live guards still apply; this arm never authorizes orders.',
