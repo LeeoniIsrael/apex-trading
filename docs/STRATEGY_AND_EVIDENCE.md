@@ -131,11 +131,19 @@ a high already above its required upper bound). Forecasts and current
 temperatures alone cannot override the market. This is a prospective paper
 test, not a claim that version 2 is profitable.
 
+On October 25, a causal replay of the existing saved candidates found **zero**
+station-day opportunities where an official Weather Company reading already
+made the YES result impossible while all version-2 price, freshness, forecast,
+and fee gates were met. That direct-evidence condition is therefore a safety
+exception rather than a strategy with retrospective support. Version 2 has one
+settled prospective development signal, a **+$1.06 hypothetical** outcome;
+one event cannot establish accuracy, execution quality, or profitability.
+
 A separate small
 `shadow_signals` table keeps one opportunity per station-day plus the exact
 rule, observed extreme, forecast extremes/timestamps, ask, quantity and fee.
 The research service records it only while trading is blocked. The strategy
 has no executor or account-control path; existing live guards, pause state,
-$2 per-bet and $5 daily limits are preserved. The launch report publishes its
-development and holdout results under `fresh_consensus_no_v1`. Reproduce the
+$2 per-bet and $5 daily limits are preserved. The launch report publishes both
+versions under `fresh_consensus_no_v1` and `fresh_consensus_no_v2`. Reproduce the
 historical study with `src.research.consensus_no.replay(database, split)`.
